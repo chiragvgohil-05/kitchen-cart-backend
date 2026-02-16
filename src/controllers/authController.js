@@ -1,6 +1,6 @@
 const User = require('../models/userModel');
 const sendResponse = require('../utils/responseHandler');
-const { registerSchema, loginSchema } = require('../validations/authValidation');
+const { registerSchema, loginSchema, updateDetailsSchema } = require('../validations/authValidation');
 
 // @desc    Register user
 // @route   POST /api/v1/auth/register
@@ -44,7 +44,7 @@ exports.login = async (req, res, next) => {
         // Validate request body
         const { error } = loginSchema.validate(req.body);
         if (error) {
-             return sendResponse(res, 400, false, 'Validation Error', null, error.details[0].message);
+            return sendResponse(res, 400, false, 'Validation Error', null, error.details[0].message);
         }
 
         const { email, password } = req.body;
@@ -62,6 +62,34 @@ exports.login = async (req, res, next) => {
         }
 
         sendTokenResponse(user, 200, res);
+    } catch (err) {
+        next(err);
+    }
+};
+
+// @desc    Update user details
+// @route   PUT /api/v1/auth/updatedetails
+// @access  Private
+exports.updateDetails = async (req, res, next) => {
+    try {
+        // Validate request body
+        const { error } = updateDetailsSchema.validate(req.body);
+        if (error) {
+            return sendResponse(res, 400, false, 'Validation Error', null, error.details[0].message);
+        }
+
+        const fieldsToUpdate = {
+            name: req.body.name,
+            email: req.body.email,
+            address: req.body.address
+        };
+
+        const user = await User.findByIdAndUpdate(req.user.id, fieldsToUpdate, {
+            new: true,
+            runValidators: true
+        });
+
+        sendResponse(res, 200, true, 'User details updated successfully', user);
     } catch (err) {
         next(err);
     }

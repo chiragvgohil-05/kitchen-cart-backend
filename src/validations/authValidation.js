@@ -19,7 +19,20 @@ const loginSchema = Joi.object({
     password: Joi.string().required()
 });
 
+const updateDetailsSchema = Joi.object({
+    name: Joi.string(),
+    email: Joi.string().email(),
+    address: Joi.object({
+        street: Joi.string(),
+        city: Joi.string(),
+        state: Joi.string(),
+        zipCode: Joi.string(),
+        country: Joi.string()
+    })
+});
+
 module.exports = {
     registerSchema,
-    loginSchema
+    loginSchema,
+    updateDetailsSchema
 };
