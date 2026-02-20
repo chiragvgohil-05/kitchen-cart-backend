@@ -10,9 +10,17 @@ const productSchema = new mongoose.Schema({
         type: String,
         required: [true, 'Please add a description']
     },
-    price: {
+    mrp: {
         type: Number,
-        required: [true, 'Please add a price']
+        required: [true, 'Please add the MRP/Old price']
+    },
+    sellingPrice: {
+        type: Number,
+        required: [true, 'Please add the selling price']
+    },
+    discount: {
+        type: Number,
+        default: 0
     },
     category: {
         type: mongoose.Schema.ObjectId,
@@ -24,14 +32,29 @@ const productSchema = new mongoose.Schema({
         required: [true, 'Please add stock quantity'],
         default: 0
     },
-    imageUrl: {
+    images: [{
         type: String,
-        required: [true, 'Please add an image URL']
+        required: [true, 'Please upload at least one image']
+    }],
+    keyFeatures: [{
+        type: String
+    }],
+    technicalSpecs: {
+        type: Map,
+        of: String
     },
     createdAt: {
         type: Date,
         default: Date.now
     }
+});
+
+// Calculate discount before saving
+productSchema.pre('save', function (next) {
+    if (this.mrp && this.sellingPrice) {
+        this.discount = Math.round(((this.mrp - this.sellingPrice) / this.mrp) * 100);
+    }
+    next();
 });
 
 module.exports = mongoose.model('Product', productSchema);

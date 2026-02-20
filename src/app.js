@@ -14,6 +14,8 @@ app.use(express.urlencoded({ extended: true }));
 app.use(cors());
 app.use(helmet());
 app.use(morgan('dev'));
+const path = require('path');
+app.use('/public', express.static(path.join(__dirname, '../public')));
 
 // Rate Limiting
 const limiter = rateLimit({

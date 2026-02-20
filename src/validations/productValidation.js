@@ -3,19 +3,26 @@ const Joi = require('joi');
 const productSchema = Joi.object({
     name: Joi.string().required(),
     description: Joi.string().required(),
-    price: Joi.number().min(0).required(),
+    mrp: Joi.number().min(0).required(),
+    sellingPrice: Joi.number().min(0).required(),
     category: Joi.string().required(),
     stock: Joi.number().min(0).required(),
-    imageUrl: Joi.string().uri().required()
+    images: Joi.array().items(Joi.string()),
+    keyFeatures: Joi.array().items(Joi.string()),
+    technicalSpecs: Joi.object().pattern(Joi.string(), Joi.string())
 });
 
 const updateProductSchema = Joi.object({
     name: Joi.string(),
     description: Joi.string(),
-    price: Joi.number().min(0),
+    mrp: Joi.number().min(0),
+    sellingPrice: Joi.number().min(0),
     category: Joi.string(),
     stock: Joi.number().min(0),
-    imageUrl: Joi.string().uri()
+    images: Joi.array().items(Joi.string()),
+    keyFeatures: Joi.array().items(Joi.string()),
+    technicalSpecs: Joi.object().pattern(Joi.string(), Joi.string()),
+    existingImages: Joi.any() // To handle existing images list from frontend
 });
 
 module.exports = {

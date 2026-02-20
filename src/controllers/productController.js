@@ -8,21 +8,13 @@ const { productSchema, updateProductSchema } = require('../validations/productVa
 exports.getProducts = async (req, res, next) => {
     try {
         let query;
-
-        // Copy req.query
         const reqQuery = { ...req.query };
-
-        // Fields to exclude
         const removeFields = ['select', 'sort', 'page', 'limit', 'search'];
         removeFields.forEach(param => delete reqQuery[param]);
 
-        // Create query string
         let queryStr = JSON.stringify(reqQuery);
-
-        // Create operators ($gt, $gte, etc)
         queryStr = queryStr.replace(/\b(gt|gte|lt|lte|in)\b/g, match => `$${match}`);
 
-        // Search by name
         let searchObj = {};
         if (req.query.search) {
             searchObj = {
@@ -30,16 +22,13 @@ exports.getProducts = async (req, res, next) => {
             };
         }
 
-        // Finding resource
         query = Product.find({ ...JSON.parse(queryStr), ...searchObj }).populate('category', 'name');
 
-        // Select Fields
         if (req.query.select) {
             const fields = req.query.select.split(',').join(' ');
             query = query.select(fields);
         }
 
-        // Sort
         if (req.query.sort) {
             const sortBy = req.query.sort.split(',').join(' ');
             query = query.sort(sortBy);
@@ -47,7 +36,6 @@ exports.getProducts = async (req, res, next) => {
             query = query.sort('-createdAt');
         }
 
-        // Pagination
         const page = parseInt(req.query.page, 10) || 1;
         const limit = parseInt(req.query.limit, 10) || 10;
         const startIndex = (page - 1) * limit;
@@ -55,25 +43,14 @@ exports.getProducts = async (req, res, next) => {
         const total = await Product.countDocuments({ ...JSON.parse(queryStr), ...searchObj });
 
         query = query.skip(startIndex).limit(limit);
-
-        // Executing query
         const products = await query;
 
-        // Pagination result
         const pagination = {};
-
         if (endIndex < total) {
-            pagination.next = {
-                page: page + 1,
-                limit
-            };
+            pagination.next = { page: page + 1, limit };
         }
-
         if (startIndex > 0) {
-            pagination.prev = {
-                page: page - 1,
-                limit
-            };
+            pagination.prev = { page: page - 1, limit };
         }
 
         sendResponse(res, 200, true, 'Products fetched successfully', {
@@ -93,11 +70,9 @@ exports.getProducts = async (req, res, next) => {
 exports.getProduct = async (req, res, next) => {
     try {
         const product = await Product.findById(req.params.id).populate('category', 'name');
-
         if (!product) {
             return sendResponse(res, 404, false, 'Product not found');
         }
-
         sendResponse(res, 200, true, 'Product fetched successfully', product);
     } catch (err) {
         next(err);
@@ -109,14 +84,28 @@ exports.getProduct = async (req, res, next) => {
 // @access  Private/Admin
 exports.createProduct = async (req, res, next) => {
     try {
-        // Validate request body
+        if (req.files && req.files.length > 0) {
+            req.body.images = req.files.map(file => `/public/uploads/products/${file.filename}`);
+        }
+
+        // Parse keyFeatures and technicalSpecs if they come as strings (common with FormData)
+        if (typeof req.body.keyFeatures === 'string') {
+            try { req.body.keyFeatures = JSON.parse(req.body.keyFeatures); } catch (e) { req.body.keyFeatures = [req.body.keyFeatures]; }
+        }
+        if (typeof req.body.technicalSpecs === 'string') {
+            try { req.body.technicalSpecs = JSON.parse(req.body.technicalSpecs); } catch (e) { req.body.technicalSpecs = {}; }
+        }
+
         const { error } = productSchema.validate(req.body);
         if (error) {
             return sendResponse(res, 400, false, 'Validation Error', null, error.details[0].message);
         }
 
-        const product = await Product.create(req.body);
+        if (!req.body.images || req.body.images.length === 0) {
+            return sendResponse(res, 400, false, 'Please upload at least one image');
+        }
 
+        const product = await Product.create(req.body);
         sendResponse(res, 201, true, 'Product created successfully', product);
     } catch (err) {
         next(err);
@@ -129,12 +118,29 @@ exports.createProduct = async (req, res, next) => {
 exports.updateProduct = async (req, res, next) => {
     try {
         let product = await Product.findById(req.params.id);
-
         if (!product) {
             return sendResponse(res, 404, false, 'Product not found');
         }
 
-        // Validate request body
+        // Handle Images
+        let images = [];
+        if (req.body.existingImages) {
+            images = Array.isArray(req.body.existingImages) ? req.body.existingImages : [req.body.existingImages];
+        }
+        if (req.files && req.files.length > 0) {
+            const newImages = req.files.map(file => `/public/uploads/products/${file.filename}`);
+            images = [...images, ...newImages];
+        }
+        req.body.images = images;
+
+        // Parse JSON fields
+        if (typeof req.body.keyFeatures === 'string') {
+            try { req.body.keyFeatures = JSON.parse(req.body.keyFeatures); } catch (e) { }
+        }
+        if (typeof req.body.technicalSpecs === 'string') {
+            try { req.body.technicalSpecs = JSON.parse(req.body.technicalSpecs); } catch (e) { }
+        }
+
         const { error } = updateProductSchema.validate(req.body);
         if (error) {
             return sendResponse(res, 400, false, 'Validation Error', null, error.details[0].message);
@@ -157,13 +163,10 @@ exports.updateProduct = async (req, res, next) => {
 exports.deleteProduct = async (req, res, next) => {
     try {
         const product = await Product.findById(req.params.id);
-
         if (!product) {
             return sendResponse(res, 404, false, 'Product not found');
         }
-
         await product.deleteOne();
-
         sendResponse(res, 200, true, 'Product deleted successfully', {});
     } catch (err) {
         next(err);
