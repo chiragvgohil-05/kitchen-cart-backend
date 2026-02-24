@@ -1,17 +1,24 @@
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
-const path = require('path');
 
-const createInvoice = (order, path) => {
-    let doc = new PDFDocument({ margin: 50 });
+const createInvoice = (order, outputPath) => {
+    return new Promise((resolve, reject) => {
+        const doc = new PDFDocument({ margin: 50 });
+        const stream = fs.createWriteStream(outputPath);
 
-    generateHeader(doc);
-    generateCustomerInformation(doc, order);
-    generateInvoiceTable(doc, order);
-    generateFooter(doc);
+        stream.on('finish', () => resolve(outputPath));
+        stream.on('error', reject);
+        doc.on('error', reject);
 
-    doc.end();
-    doc.pipe(fs.createWriteStream(path));
+        doc.pipe(stream);
+
+        generateHeader(doc);
+        generateCustomerInformation(doc, order);
+        generateInvoiceTable(doc, order);
+        generateFooter(doc);
+
+        doc.end();
+    });
 };
 
 function generateHeader(doc) {
@@ -26,6 +33,8 @@ function generateHeader(doc) {
 }
 
 function generateCustomerInformation(doc, order) {
+    const shippingAddress = order.shippingAddress || {};
+
     doc
         .fillColor('#444444')
         .fontSize(20)
@@ -46,11 +55,11 @@ function generateCustomerInformation(doc, order) {
         .text('Balance Due:', 50, customerInformationTop + 30)
         .text(formatCurrency(order.totalAmount), 150, customerInformationTop + 30)
         .font('Helvetica-Bold')
-        .text(order.shippingAddress.name, 300, customerInformationTop) // Assuming name is passed or in shippingAddress
+        .text(shippingAddress.name || order.user?.name || 'Customer', 300, customerInformationTop)
         .font('Helvetica')
-        .text(order.shippingAddress.street, 300, customerInformationTop + 15)
+        .text(shippingAddress.street || '-', 300, customerInformationTop + 15)
         .text(
-            `${order.shippingAddress.city}, ${order.shippingAddress.state}, ${order.shippingAddress.country}`,
+            `${shippingAddress.city || '-'}, ${shippingAddress.state || '-'}, ${shippingAddress.zipCode || '-'}, ${shippingAddress.country || '-'}`,
             300,
             customerInformationTop + 30
         )
@@ -81,7 +90,7 @@ function generateInvoiceTable(doc, order) {
         generateTableRow(
             doc,
             position,
-            item.product.name ? item.product.name : 'Product', // Assuming populated
+            item.product?.name ? item.product.name : 'Product',
             formatCurrency(item.price),
             item.quantity,
             formatCurrency(item.price * item.quantity)

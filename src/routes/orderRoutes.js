@@ -2,8 +2,10 @@ const express = require('express');
 const {
     createOrder,
     verifyPayment,
+    getOrderInvoice,
     getMyOrders,
     getAllOrders,
+    cancelMyOrder,
     updateOrderStatus
 } = require('../controllers/orderController');
 
@@ -16,7 +18,9 @@ router.use(protect);
 
 router.post('/', createOrder);
 router.post('/verify', verifyPayment);
+router.get('/:id/invoice', getOrderInvoice);
 router.get('/', getMyOrders);
+router.put('/:id/cancel', cancelMyOrder);
 
 router.get('/admin', authorize('admin'), getAllOrders);
 router.put('/:id', authorize('admin'), updateOrderStatus);
