@@ -3,7 +3,7 @@ const Joi = require('joi');
 const productSchema = Joi.object({
     name: Joi.string().required(),
     description: Joi.string().required(),
-    mrp: Joi.number().min(0).required(),
+    mrp: Joi.number().greater(0).required(),
     sellingPrice: Joi.number().min(0).required(),
     category: Joi.string().required(),
     stock: Joi.number().min(0).required(),
@@ -15,7 +15,7 @@ const productSchema = Joi.object({
 const updateProductSchema = Joi.object({
     name: Joi.string(),
     description: Joi.string(),
-    mrp: Joi.number().min(0),
+    mrp: Joi.number().greater(0),
     sellingPrice: Joi.number().min(0),
     category: Joi.string(),
     stock: Joi.number().min(0),

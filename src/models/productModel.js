@@ -51,9 +51,17 @@ const productSchema = new mongoose.Schema({
 
 // Calculate discount before saving
 productSchema.pre('save', function (next) {
-    if (this.mrp && this.sellingPrice) {
-        this.discount = Math.round(((this.mrp - this.sellingPrice) / this.mrp) * 100);
+    const mrp = Number(this.mrp);
+    const sellingPrice = Number(this.sellingPrice);
+
+    if (!Number.isFinite(mrp) || mrp <= 0 || !Number.isFinite(sellingPrice) || sellingPrice < 0) {
+        this.discount = 0;
+        return next();
     }
+
+    const discount = ((mrp - sellingPrice) / mrp) * 100;
+    this.discount = Math.max(0, Math.round(discount));
+
     next();
 });
 

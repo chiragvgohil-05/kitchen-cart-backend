@@ -2,6 +2,17 @@ const Product = require('../models/productModel');
 const sendResponse = require('../utils/responseHandler');
 const { productSchema, updateProductSchema } = require('../validations/productValidation');
 
+const calculateDiscount = (mrp, sellingPrice) => {
+    const parsedMrp = Number(mrp);
+    const parsedSellingPrice = Number(sellingPrice);
+
+    if (!Number.isFinite(parsedMrp) || parsedMrp <= 0 || !Number.isFinite(parsedSellingPrice) || parsedSellingPrice < 0) {
+        return 0;
+    }
+
+    return Math.max(0, Math.round(((parsedMrp - parsedSellingPrice) / parsedMrp) * 100));
+};
+
 // @desc    Get all products
 // @route   GET /api/v1/products
 // @access  Public
@@ -98,12 +109,22 @@ exports.createProduct = async (req, res, next) => {
 
         const { error } = productSchema.validate(req.body);
         if (error) {
-            return sendResponse(res, 400, false, 'Validation Error', null, error.details[0].message);
+            return sendResponse(res, 422, false, 'Validation Error', null, error.details[0].message);
         }
 
         if (!req.body.images || req.body.images.length === 0) {
-            return sendResponse(res, 400, false, 'Please upload at least one image');
+            return sendResponse(res, 422, false, 'Please upload at least one image');
         }
+
+        const mrp = Number(req.body.mrp);
+        const sellingPrice = Number(req.body.sellingPrice);
+        if (sellingPrice > mrp) {
+            return sendResponse(res, 422, false, 'Validation Error', null, 'Selling price cannot be greater than MRP');
+        }
+
+        req.body.mrp = mrp;
+        req.body.sellingPrice = sellingPrice;
+        req.body.discount = calculateDiscount(mrp, sellingPrice);
 
         const product = await Product.create(req.body);
         sendResponse(res, 201, true, 'Product created successfully', product);
@@ -143,13 +164,28 @@ exports.updateProduct = async (req, res, next) => {
 
         const { error } = updateProductSchema.validate(req.body);
         if (error) {
-            return sendResponse(res, 400, false, 'Validation Error', null, error.details[0].message);
+            return sendResponse(res, 422, false, 'Validation Error', null, error.details[0].message);
         }
 
-        product = await Product.findByIdAndUpdate(req.params.id, req.body, {
-            new: true,
-            runValidators: true
-        });
+        if (!req.body.images || req.body.images.length === 0) {
+            return sendResponse(res, 422, false, 'Validation Error', null, 'Please keep at least one product image');
+        }
+
+        const mrp = req.body.mrp !== undefined ? Number(req.body.mrp) : Number(product.mrp);
+        const sellingPrice = req.body.sellingPrice !== undefined
+            ? Number(req.body.sellingPrice)
+            : Number(product.sellingPrice);
+
+        if (sellingPrice > mrp) {
+            return sendResponse(res, 422, false, 'Validation Error', null, 'Selling price cannot be greater than MRP');
+        }
+
+        if (req.body.mrp !== undefined) req.body.mrp = mrp;
+        if (req.body.sellingPrice !== undefined) req.body.sellingPrice = sellingPrice;
+        req.body.discount = calculateDiscount(mrp, sellingPrice);
+
+        product.set(req.body);
+        await product.save();
 
         sendResponse(res, 200, true, 'Product updated successfully', product);
     } catch (err) {
@@ -167,7 +203,7 @@ exports.deleteProduct = async (req, res, next) => {
             return sendResponse(res, 404, false, 'Product not found');
         }
         await product.deleteOne();
-        sendResponse(res, 200, true, 'Product deleted successfully', {});
+        return res.status(204).send();
     } catch (err) {
         next(err);
     }

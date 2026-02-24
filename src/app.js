@@ -12,7 +12,11 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cors());
-app.use(helmet());
+app.use(
+    helmet({
+        crossOriginResourcePolicy: { policy: 'cross-origin' }
+    })
+);
 app.use(morgan('dev'));
 const path = require('path');
 app.use('/public', express.static(path.join(__dirname, '../public')));
@@ -20,7 +24,7 @@ app.use('/public', express.static(path.join(__dirname, '../public')));
 // Rate Limiting
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // Limit each IP to 100 requests per windowMs
+    max: process.env.NODE_ENV === 'production' ? 100 : 1000, // Relaxed limit in development
     message: 'Too many requests from this IP, please try again after 15 minutes',
     handler: (req, res, next, options) => {
         sendResponse(res, 429, false, options.message);

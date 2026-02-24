@@ -13,58 +13,90 @@ const fs = require('fs');
 // @desc    Create new order (Initialize Payment)
 // @route   POST /api/v1/orders
 // @access  Private
+// @desc    Create new order (Initialize Payment)
+// @route   POST /api/v1/orders
+// @access  Private
 exports.createOrder = async (req, res, next) => {
     try {
-        const { shippingAddress } = req.body;
-        
-        const cart = await Cart.findOne({ user: req.user.id }).populate('items.product');
+        // Front‑end sends shippingAddress and optionally paymentMethod (default COD)
+        const { shippingAddress, paymentMethod = 'COD' } = req.body;
 
+        // Get the user's cart with populated product data
+        const cart = await Cart.findOne({ user: req.user.id }).populate('items.product');
         if (!cart || cart.items.length === 0) {
             return sendResponse(res, 400, false, 'No items in cart');
         }
 
+        // ---- 1️⃣ Calculate total using the correct field ----
         let totalAmount = 0;
         cart.items.forEach(item => {
-            totalAmount += item.product.price * item.quantity;
+            // product schema uses `sellingPrice`
+            totalAmount += (item.product.sellingPrice || 0) * item.quantity;
         });
 
-        // Create Razorpay Order
-        const options = {
-            amount: totalAmount * 100, // Amount in paise
-            currency: 'INR',
-            receipt: `receipt_order_${Date.now()}`
-        };
+        // ---- 2️⃣ Razorpay flow (if requested) ----
+        if (paymentMethod === 'Razorpay') {
+            const options = {
+                amount: Math.round(totalAmount * 100), // paise
+                currency: 'INR',
+                receipt: `receipt_order_${Date.now()}`
+            };
+            const razorpayOrder = await instance.orders.create(options);
 
-        const razorpayOrder = await instance.orders.create(options);
+            const order = await Order.create({
+                user: req.user.id,
+                items: cart.items.map(item => ({
+                    product: item.product._id,
+                    quantity: item.quantity,
+                    price: item.product.sellingPrice
+                })),
+                totalAmount,
+                shippingAddress,
+                paymentResult: {
+                    razorpay_order_id: razorpayOrder.id,
+                    status: 'pending'
+                }
+            });
 
-        // We don't save the order to DB yet, we wait for payment success
-        // But to persist shipping address we might need to send it in verify step or temp store
-        // For simplicity, we assume frontend sends shippingAddress again in verify or we create a Pending Order here.
-        // Creating Pending Order here is better for tracking.
+            return sendResponse(res, 201, true, 'Razorpay order created', {
+                order,
+                razorpayOrder
+            });
+        }
 
+        // ---- 3️⃣ COD flow (default) ----
         const order = await Order.create({
             user: req.user.id,
             items: cart.items.map(item => ({
                 product: item.product._id,
                 quantity: item.quantity,
-                price: item.product.price
+                price: item.product.sellingPrice
             })),
             totalAmount,
             shippingAddress,
-            paymentResult: {
-                razorpay_order_id: razorpayOrder.id,
-                status: 'pending'
-            }
+            status: 'Processing',
+            paymentResult: { status: 'COD' }
         });
 
-        sendResponse(res, 201, true, 'Razorpay order created', {
-            order,
-            razorpayOrder
-        });
+        // Reduce stock for each purchased product
+        for (const item of cart.items) {
+            const product = await Product.findById(item.product._id);
+            if (product) {
+                product.stock = Math.max(0, product.stock - item.quantity);
+                await product.save();
+            }
+        }
+
+        // Empty the cart after a successful COD order
+        await Cart.findOneAndDelete({ user: req.user.id });
+
+        return sendResponse(res, 201, true, 'Order placed successfully (COD)', { order });
     } catch (err) {
+        console.error('Order Creation Error:', err);
         next(err);
     }
 };
+
 
 // @desc    Verify Payment
 // @route   POST /api/v1/orders/verify
@@ -88,7 +120,7 @@ exports.verifyPayment = async (req, res, next) => {
         if (expectedSignature === razorpay_signature) {
             // Payment Success
             const order = await Order.findById(orderId).populate('items.product');
-            
+
             if (!order) {
                 return sendResponse(res, 404, false, 'Order not found');
             }
@@ -117,7 +149,7 @@ exports.verifyPayment = async (req, res, next) => {
             // Generate Invoice
             const invoiceName = `invoice_${order._id}.pdf`;
             const invoicePath = path.join(__dirname, '../../invoices', invoiceName);
-            
+
             createInvoice(order, invoicePath);
 
             // Send Email (Async - don't block response)
