@@ -6,7 +6,8 @@ const {
     getMyOrders,
     getAllOrders,
     cancelMyOrder,
-    updateOrderStatus
+    updateOrderStatus,
+    getRazorpayOrderForPendingOrder
 } = require('../controllers/orderController');
 
 const { protect } = require('../middlewares/authMiddleware');
@@ -18,6 +19,7 @@ router.use(protect);
 
 router.post('/', createOrder);
 router.post('/verify', verifyPayment);
+router.get('/:id/retry-payment', getRazorpayOrderForPendingOrder);
 router.get('/:id/invoice', getOrderInvoice);
 router.get('/', getMyOrders);
 router.put('/:id/cancel', cancelMyOrder);

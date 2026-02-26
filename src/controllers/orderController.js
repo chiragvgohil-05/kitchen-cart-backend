@@ -249,6 +249,64 @@ exports.verifyPayment = async (req, res, next) => {
     }
 };
 
+// @desc    Get Razorpay order data for a pending order
+// @route   GET /api/orders/:id/retry-payment
+// @access  Private
+exports.getRazorpayOrderForPendingOrder = async (req, res, next) => {
+    try {
+        const order = await Order.findOne({
+            _id: req.params.id,
+            user: req.user.id,
+            status: { $regex: /^pending$/i } // Case-insensitive check
+        });
+
+        if (!order) {
+            return sendResponse(res, 404, false, 'Pending order not found');
+        }
+
+        if (order.paymentResult?.status === 'paid') {
+            return sendResponse(res, 400, false, 'Order is already paid');
+        }
+
+        if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_SECRET) {
+            return sendResponse(res, 500, false, 'Razorpay is not configured on the server');
+        }
+
+        const amount = Math.round(order.totalAmount * 100);
+        if (!amount || amount < 100) { // Razorpay minimum amount is 100 paise (R 1)
+            return sendResponse(res, 400, false, `Invalid order amount: ${order.totalAmount}`);
+        }
+
+        const options = {
+            amount: amount,
+            currency: 'INR',
+            receipt: `rcpt_${order._id.toString().slice(-10)}_${Date.now()}`.slice(0, 40)
+        };
+
+        console.log('Razorpay Order Options:', options);
+        const razorpayOrder = await instance.orders.create(options);
+
+        // Ensure paymentResult object exists
+        if (!order.paymentResult) {
+            order.paymentResult = {};
+        }
+
+        // Update the order with new razorpay_order_id
+        order.paymentResult.razorpay_order_id = razorpayOrder.id;
+        order.markModified('paymentResult'); // Ensure Mongoose detects the nested change
+        await order.save();
+
+        return sendResponse(res, 200, true, 'Razorpay order re-created', {
+            order,
+            razorpayOrder,
+            razorpayKeyId: process.env.RAZORPAY_KEY_ID
+        });
+    } catch (err) {
+        console.error('Retry Payment Error Details:', err);
+        next(err);
+    }
+};
+
 // @desc    Download order invoice
 // @route   GET /api/orders/:id/invoice
 // @access  Private
@@ -333,7 +391,7 @@ exports.cancelMyOrder = async (req, res, next) => {
             return sendResponse(res, 400, false, 'This order cannot be cancelled now');
         }
 
-        const shouldRestoreStock = ['COD', 'paid'].includes(order.paymentResult?.status);
+        const shouldRestoreStock = ['COD', 'paid', 'Marked as Paid'].includes(order.paymentResult?.status);
         if (shouldRestoreStock) {
             await restoreStockForOrder(order);
         }
@@ -359,11 +417,25 @@ exports.updateOrderStatus = async (req, res, next) => {
             return sendResponse(res, 404, false, 'Order not found');
         }
 
-        if (status === 'Cancelled' && order.status !== 'Cancelled') {
-            const shouldRestoreStock = ['COD', 'paid'].includes(order.paymentResult?.status);
+        const oldStatus = order.status;
+        if (status === 'Cancelled' && oldStatus !== 'Cancelled') {
+            const shouldRestoreStock = ['COD', 'paid', 'Marked as Paid'].includes(order.paymentResult?.status);
             if (shouldRestoreStock) {
                 await restoreStockForOrder(order);
             }
+        }
+
+        // If admin manually updates a Pending order to Processing (mark as paid), decrease stock
+        if (oldStatus === 'Pending' && status === 'Processing') {
+            for (const item of order.items) {
+                const productId = item.product?._id || item.product;
+                const product = await Product.findById(productId);
+                if (product) {
+                    product.stock = Math.max(0, product.stock - item.quantity);
+                    await product.save();
+                }
+            }
+            order.paymentResult.status = 'Marked as Paid';
         }
 
         order.status = status;
