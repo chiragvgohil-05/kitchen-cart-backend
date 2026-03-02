@@ -34,6 +34,11 @@ const userSchema = new mongoose.Schema({
         zipCode: String,
         country: String
     },
+    walletBalance: {
+        type: Number,
+        default: 0,
+        min: [0, 'Wallet balance cannot be negative']
+    },
     createdAt: {
         type: Date,
         default: Date.now

@@ -27,6 +27,26 @@ const orderSchema = new mongoose.Schema({
         type: Number,
         required: true
     },
+    paymentMethod: {
+        type: String,
+        enum: ['COD', 'Razorpay', 'Stripe', 'Wallet'],
+        default: 'COD'
+    },
+    paymentStatus: {
+        type: String,
+        enum: ['pending', 'paid', 'failed', 'cod'],
+        default: 'pending'
+    },
+    walletUsed: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
+    gatewayAmount: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
     shippingAddress: {
         name: String,
         street: String,
@@ -49,6 +69,19 @@ const orderSchema = new mongoose.Schema({
         required: true,
         enum: ['Pending', 'Processing', 'Shipped', 'Delivered', 'Cancelled'],
         default: 'Pending'
+    },
+    inventoryAdjusted: {
+        type: Boolean,
+        default: false
+    },
+    walletRefundedAmount: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
+    cancelledAt: {
+        type: Date,
+        default: null
     },
     createdAt: {
         type: Date,

@@ -109,7 +109,8 @@ const sendTokenResponse = (user, statusCode, res) => {
         name: user.name,
         email: user.email,
         role: user.role,
-        address: user.address
+        address: user.address,
+        walletBalance: user.walletBalance
     };
 
     res.status(statusCode).json({

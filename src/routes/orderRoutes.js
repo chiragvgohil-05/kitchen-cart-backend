@@ -2,6 +2,7 @@ const express = require('express');
 const {
     createOrder,
     verifyPayment,
+    verifyStripePayment,
     getOrderInvoice,
     getMyOrders,
     getAllOrders,
@@ -19,6 +20,7 @@ router.use(protect);
 
 router.post('/', createOrder);
 router.post('/verify', verifyPayment);
+router.post('/verify/stripe', verifyStripePayment);
 router.get('/:id/retry-payment', getRazorpayOrderForPendingOrder);
 router.get('/:id/invoice', getOrderInvoice);
 router.get('/', getMyOrders);

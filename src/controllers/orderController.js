@@ -2,12 +2,53 @@ const crypto = require('crypto');
 const Order = require('../models/orderModel');
 const Cart = require('../models/cartModel');
 const Product = require('../models/productModel');
+const User = require('../models/userModel');
 const instance = require('../config/razorpay');
 const transporter = require('../config/nodemailer');
 const createInvoice = require('../utils/invoiceGenerator');
 const sendResponse = require('../utils/responseHandler');
+const { creditWallet, debitWallet } = require('../services/walletService');
+const { runWithOptionalTransaction } = require('../services/transactionService');
 const path = require('path');
 const fs = require('fs');
+
+let stripeClient = null;
+
+const getStripeClient = () => {
+    if (!process.env.STRIPE_SECRET_KEY) {
+        return null;
+    }
+
+    if (stripeClient) {
+        return stripeClient;
+    }
+
+    try {
+        // Lazy require so backend can run without Stripe SDK until configured.
+        const Stripe = require('stripe');
+        stripeClient = new Stripe(process.env.STRIPE_SECRET_KEY);
+        return stripeClient;
+    } catch (error) {
+        console.error('Stripe SDK is missing. Install `stripe` package to enable Stripe payments.');
+        return null;
+    }
+};
+
+const withSession = (query, session) => (session ? query.session(session) : query);
+
+const saveWithSession = async (doc, session) => {
+    if (session) {
+        return doc.save({ session });
+    }
+
+    return doc.save();
+};
+
+const buildError = (message, statusCode = 400) => {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    return error;
+};
 
 const normalizeStringField = (value) => (
     typeof value === 'string' ? value.trim() : ''
@@ -48,24 +89,123 @@ const ensureInvoiceForOrder = async (order, options = {}) => {
     return { invoiceName, invoicePath };
 };
 
-const restoreStockForOrder = async (order) => {
-    for (const item of order.items || []) {
+const getValidPaymentMethod = (paymentMethod) => {
+    if (['COD', 'Razorpay', 'Stripe'].includes(paymentMethod)) {
+        return paymentMethod;
+    }
+    return 'COD';
+};
+
+const createOrderDocument = async (payload, session = null) => {
+    if (session) {
+        const [order] = await Order.create([payload], { session });
+        return order;
+    }
+
+    return Order.create(payload);
+};
+
+const ensureStockAvailable = async (orderItems, session = null) => {
+    for (const item of orderItems) {
         const productId = item.product?._id || item.product;
-        const product = await Product.findById(productId);
-        if (product) {
-            product.stock += item.quantity;
-            await product.save();
+        const product = await withSession(
+            Product.findById(productId).select('name stock'),
+            session
+        );
+
+        if (!product) {
+            throw buildError('One or more products are no longer available', 400);
+        }
+
+        if (product.stock < item.quantity) {
+            throw buildError(`Insufficient stock for ${product.name}`, 400);
         }
     }
 };
 
-// @desc    Create new order (Initialize Payment)
+const decreaseStockForOrderItems = async (orderItems, session = null) => {
+    for (const item of orderItems) {
+        const productId = item.product?._id || item.product;
+
+        const updated = await withSession(
+            Product.findOneAndUpdate(
+                { _id: productId, stock: { $gte: item.quantity } },
+                { $inc: { stock: -item.quantity } },
+                { new: true }
+            ),
+            session
+        );
+
+        if (!updated) {
+            throw buildError('Unable to reserve stock for one or more products', 400);
+        }
+    }
+};
+
+const restoreStockForOrder = async (order, session = null) => {
+    for (const item of order.items || []) {
+        const productId = item.product?._id || item.product;
+        await withSession(
+            Product.findByIdAndUpdate(productId, { $inc: { stock: item.quantity } }),
+            session
+        );
+    }
+};
+
+const getCancellationWalletCreditAmount = (order) => {
+    const onlinePaidOrder = ['Razorpay', 'Stripe', 'Wallet'].includes(order.paymentMethod)
+        && order.paymentStatus === 'paid';
+
+    if (onlinePaidOrder) {
+        return order.totalAmount;
+    }
+
+    if (order.walletUsed > 0) {
+        // Refund only the wallet deduction for unpaid/partially paid orders.
+        return order.walletUsed;
+    }
+
+    return 0;
+};
+
+const sendOrderConfirmationEmail = async (order, user) => {
+    if (!process.env.EMAIL_USER || !user?.email) {
+        return;
+    }
+
+    const { invoiceName, invoicePath } = await ensureInvoiceForOrder(order, { force: true });
+
+    const mailOptions = {
+        from: process.env.EMAIL_USER,
+        to: user.email,
+        subject: 'Order Confirmation - Kitchen Cart',
+        text: `Thank you for your order! Your order ID is ${order._id}. Please find the invoice attached.`,
+        attachments: [
+            {
+                filename: invoiceName,
+                path: invoicePath,
+                contentType: 'application/pdf'
+            }
+        ]
+    };
+
+    transporter.sendMail(mailOptions, (err, info) => {
+        if (err) {
+            console.error('Error sending email:', err);
+            return;
+        }
+
+        console.log('Email sent:', info.response);
+    });
+};
+
+// @desc    Create new order (supports COD, Razorpay, Stripe + wallet usage)
 // @route   POST /api/orders
 // @access  Private
 exports.createOrder = async (req, res, next) => {
     try {
-        const { paymentMethod = 'COD' } = req.body;
-        const selectedPaymentMethod = paymentMethod === 'Razorpay' ? 'Razorpay' : 'COD';
+        const paymentMethod = getValidPaymentMethod(req.body.paymentMethod);
+        const shouldUseWallet = paymentMethod !== 'COD' && req.body.useWallet !== false;
         const shippingAddress = getProfileAddressForOrder(req.user);
 
         if (!isAddressComplete(shippingAddress)) {
@@ -94,61 +234,155 @@ exports.createOrder = async (req, res, next) => {
             return sendResponse(res, 400, false, 'Cart items are not valid');
         }
 
-        const totalAmount = orderItems.reduce(
+        const totalAmount = Number(orderItems.reduce(
             (sum, item) => sum + (item.price * item.quantity),
             0
-        );
+        ).toFixed(2));
 
-        if (selectedPaymentMethod === 'Razorpay') {
+        if (totalAmount <= 0) {
+            return sendResponse(res, 400, false, 'Order total must be greater than zero');
+        }
+
+        let walletUsed = 0;
+        if (shouldUseWallet) {
+            const userForWallet = await User.findById(req.user.id).select('walletBalance');
+            if (!userForWallet) {
+                return sendResponse(res, 404, false, 'User not found');
+            }
+            walletUsed = Math.min(userForWallet.walletBalance || 0, totalAmount);
+        }
+
+        const gatewayAmount = Number(Math.max(0, totalAmount - walletUsed).toFixed(2));
+
+        let razorpayOrder = null;
+        let stripePaymentIntent = null;
+
+        if (paymentMethod === 'Razorpay' && gatewayAmount > 0) {
             if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_SECRET) {
                 return sendResponse(res, 500, false, 'Razorpay is not configured on the server');
             }
 
-            const options = {
-                amount: Math.round(totalAmount * 100),
+            const amountInPaise = Math.round(gatewayAmount * 100);
+            if (amountInPaise < 100) {
+                return sendResponse(res, 400, false, 'Minimum online payable amount is Rs 1.00');
+            }
+
+            razorpayOrder = await instance.orders.create({
+                amount: amountInPaise,
                 currency: 'INR',
                 receipt: `receipt_order_${Date.now()}`
-            };
-            const razorpayOrder = await instance.orders.create(options);
+            });
+        }
 
-            const order = await Order.create({
+        if (paymentMethod === 'Stripe' && gatewayAmount > 0) {
+            const stripe = getStripeClient();
+            if (!stripe) {
+                return sendResponse(
+                    res,
+                    500,
+                    false,
+                    'Stripe is not configured. Add STRIPE_SECRET_KEY and install stripe package'
+                );
+            }
+
+            stripePaymentIntent = await stripe.paymentIntents.create({
+                amount: Math.round(gatewayAmount * 100),
+                currency: 'inr',
+                metadata: {
+                    userId: req.user.id.toString()
+                }
+            });
+        }
+
+        const createdOrder = await runWithOptionalTransaction(async (session) => {
+            await ensureStockAvailable(orderItems, session);
+
+            const fullWalletPayment = paymentMethod !== 'COD' && gatewayAmount === 0;
+            const effectivePaymentMethod = fullWalletPayment ? 'Wallet' : paymentMethod;
+            const isImmediateOrder = paymentMethod === 'COD' || fullWalletPayment;
+
+            const paymentResult = {};
+            if (paymentMethod === 'COD') {
+                paymentResult.status = 'COD';
+            } else if (paymentMethod === 'Razorpay' && razorpayOrder) {
+                paymentResult.razorpay_order_id = razorpayOrder.id;
+                paymentResult.status = 'pending';
+            } else if (paymentMethod === 'Stripe' && stripePaymentIntent) {
+                paymentResult.id = stripePaymentIntent.id;
+                paymentResult.status = 'pending';
+            } else if (fullWalletPayment) {
+                paymentResult.status = 'Wallet';
+            }
+
+            const order = await createOrderDocument({
                 user: req.user.id,
                 items: orderItems,
                 totalAmount,
+                paymentMethod: effectivePaymentMethod,
+                paymentStatus: paymentMethod === 'COD' ? 'cod' : (fullWalletPayment ? 'paid' : 'pending'),
+                walletUsed,
+                gatewayAmount,
                 shippingAddress,
-                paymentResult: {
-                    razorpay_order_id: razorpayOrder.id,
-                    status: 'pending'
-                }
-            });
+                paymentResult,
+                status: isImmediateOrder ? 'Processing' : 'Pending'
+            }, session);
 
-            return sendResponse(res, 201, true, 'Razorpay order created', {
-                order,
-                razorpayOrder,
-                razorpayKeyId: process.env.RAZORPAY_KEY_ID
-            });
-        }
+            if (walletUsed > 0) {
+                await debitWallet(
+                    {
+                        userId: req.user.id,
+                        amount: walletUsed,
+                        reason: `Order payment for order ${order._id}`,
+                        orderId: order._id,
+                        meta: {
+                            source: 'checkout',
+                            paymentMethod: effectivePaymentMethod
+                        }
+                    },
+                    { session }
+                );
+            }
 
-        const order = await Order.create({
-            user: req.user.id,
-            items: orderItems,
-            totalAmount,
-            shippingAddress,
-            status: 'Processing',
-            paymentResult: { status: 'COD' }
+            if (isImmediateOrder) {
+                await decreaseStockForOrderItems(order.items, session);
+                order.inventoryAdjusted = true;
+                await saveWithSession(order, session);
+
+                await withSession(Cart.findOneAndDelete({ user: req.user.id }), session);
+            }
+
+            return order;
         });
 
-        for (const item of orderItems) {
-            const product = await Product.findById(item.product);
-            if (product) {
-                product.stock = Math.max(0, product.stock - item.quantity);
-                await product.save();
-            }
+        if (paymentMethod === 'Razorpay' && gatewayAmount > 0) {
+            return sendResponse(res, 201, true, 'Razorpay order created', {
+                order: createdOrder,
+                razorpayOrder,
+                razorpayKeyId: process.env.RAZORPAY_KEY_ID,
+                walletUsed,
+                gatewayAmount
+            });
         }
 
-        await Cart.findOneAndDelete({ user: req.user.id });
+        if (paymentMethod === 'Stripe' && gatewayAmount > 0) {
+            return sendResponse(res, 201, true, 'Stripe payment initialized', {
+                order: createdOrder,
+                stripePaymentIntent: {
+                    id: stripePaymentIntent.id,
+                    clientSecret: stripePaymentIntent.client_secret,
+                    amount: stripePaymentIntent.amount,
+                    currency: stripePaymentIntent.currency
+                },
+                walletUsed,
+                gatewayAmount
+            });
+        }
 
-        return sendResponse(res, 201, true, 'Order placed successfully (COD)', { order });
+        const message = createdOrder.paymentMethod === 'Wallet'
+            ? 'Order placed successfully using wallet balance'
+            : 'Order placed successfully (COD)';
+
+        return sendResponse(res, 201, true, message, { order: createdOrder });
     } catch (err) {
         console.error('Order Creation Error:', err);
         next(err);
@@ -156,7 +390,7 @@ exports.createOrder = async (req, res, next) => {
 };
 
 
-// @desc    Verify Payment
+// @desc    Verify Razorpay payment
 // @route   POST /api/orders/verify
 // @access  Private
 exports.verifyPayment = async (req, res, next) => {
@@ -172,78 +406,189 @@ exports.verifyPayment = async (req, res, next) => {
             return sendResponse(res, 400, false, 'Payment verification payload is incomplete');
         }
 
-        const body = razorpay_order_id + '|' + razorpay_payment_id;
+        if (!process.env.RAZORPAY_SECRET) {
+            return sendResponse(res, 500, false, 'Razorpay secret is not configured on server');
+        }
 
+        const body = `${razorpay_order_id}|${razorpay_payment_id}`;
         const expectedSignature = crypto
             .createHmac('sha256', process.env.RAZORPAY_SECRET)
-            .update(body.toString())
+            .update(body)
             .digest('hex');
 
         if (expectedSignature !== razorpay_signature) {
             return sendResponse(res, 400, false, 'Invalid signature');
         }
 
-        const order = await Order.findOne({
-            _id: orderId,
-            user: req.user.id
-        }).populate('items.product');
+        const { order, alreadyPaid } = await runWithOptionalTransaction(async (session) => {
+            const orderRecord = await withSession(
+                Order.findOne({
+                    _id: orderId,
+                    user: req.user.id
+                }).populate('items.product'),
+                session
+            );
 
-        if (!order) {
-            return sendResponse(res, 404, false, 'Order not found');
-        }
-
-        if (order.paymentResult?.razorpay_order_id !== razorpay_order_id) {
-            return sendResponse(res, 400, false, 'Order mismatch for payment verification');
-        }
-
-        if (order.paymentResult?.status === 'paid') {
-            return sendResponse(res, 200, true, 'Payment already verified', order);
-        }
-
-        order.paymentResult = {
-            razorpay_order_id,
-            razorpay_payment_id,
-            razorpay_signature,
-            status: 'paid'
-        };
-        order.status = 'Processing';
-        await order.save();
-
-        await Cart.findOneAndDelete({ user: req.user.id });
-
-        for (const item of order.items) {
-            const productId = item.product?._id || item.product;
-            const product = await Product.findById(productId);
-            if (product) {
-                product.stock = Math.max(0, product.stock - item.quantity);
-                await product.save();
+            if (!orderRecord) {
+                throw buildError('Order not found', 404);
             }
-        }
 
-        const { invoiceName, invoicePath } = await ensureInvoiceForOrder(order, { force: true });
+            if (orderRecord.status === 'Cancelled') {
+                throw buildError('Cancelled orders cannot be paid', 400);
+            }
 
-        if (process.env.EMAIL_USER && req.user?.email) {
-            const mailOptions = {
-                from: process.env.EMAIL_USER,
-                to: req.user.email,
-                subject: 'Order Confirmation - Kitchen Cart',
-                text: `Thank you for your order! Your order ID is ${order._id}. Please find the invoice attached.`,
-                attachments: [
-                    {
-                        filename: invoiceName,
-                        path: invoicePath,
-                        contentType: 'application/pdf'
-                    }
-                ]
+            if (orderRecord.paymentMethod !== 'Razorpay') {
+                throw buildError('This order is not a Razorpay payment order', 400);
+            }
+
+            if (orderRecord.paymentStatus === 'paid') {
+                return { order: orderRecord, alreadyPaid: true };
+            }
+
+            if (orderRecord.paymentResult?.razorpay_order_id !== razorpay_order_id) {
+                throw buildError('Order mismatch for payment verification', 400);
+            }
+
+            orderRecord.paymentResult = {
+                ...orderRecord.paymentResult,
+                razorpay_order_id,
+                razorpay_payment_id,
+                razorpay_signature,
+                status: 'paid',
+                update_time: new Date().toISOString()
             };
+            orderRecord.paymentStatus = 'paid';
+            orderRecord.status = 'Processing';
 
-            transporter.sendMail(mailOptions, (err, info) => {
-                if (err) console.error('Error sending email:', err);
-                else console.log('Email sent:', info.response);
-            });
+            if (!orderRecord.inventoryAdjusted) {
+                await ensureStockAvailable(orderRecord.items, session);
+                await decreaseStockForOrderItems(orderRecord.items, session);
+                orderRecord.inventoryAdjusted = true;
+            }
+
+            await saveWithSession(orderRecord, session);
+            await withSession(Cart.findOneAndDelete({ user: req.user.id }), session);
+
+            return {
+                order: orderRecord,
+                alreadyPaid: false
+            };
+        });
+
+        if (!alreadyPaid) {
+            await sendOrderConfirmationEmail(order, req.user);
         }
 
-        return sendResponse(res, 200, true, 'Payment verified and order placed successfully', order);
+        return sendResponse(
+            res,
+            200,
+            true,
+            alreadyPaid ? 'Payment already verified' : 'Payment verified and order placed successfully',
+            order
+        );
+    } catch (err) {
+        next(err);
+    }
+};
+
+// @desc    Verify Stripe payment
+// @route   POST /api/orders/verify/stripe
+// @access  Private
+exports.verifyStripePayment = async (req, res, next) => {
+    try {
+        const { orderId, paymentIntentId } = req.body;
+
+        if (!orderId || !paymentIntentId) {
+            return sendResponse(res, 400, false, 'Stripe verification payload is incomplete');
+        }
+
+        const stripe = getStripeClient();
+        if (!stripe) {
+            return sendResponse(
+                res,
+                500,
+                false,
+                'Stripe is not configured. Add STRIPE_SECRET_KEY and install stripe package'
+            );
+        }
+
+        let paymentIntent;
+        try {
+            paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+        } catch (error) {
+            return sendResponse(res, 400, false, 'Unable to verify Stripe payment intent');
+        }
+
+        if (paymentIntent.status !== 'succeeded') {
+            return sendResponse(res, 400, false, 'Stripe payment is not successful yet');
+        }
+
+        const { order, alreadyPaid } = await runWithOptionalTransaction(async (session) => {
+            const orderRecord = await withSession(
+                Order.findOne({
+                    _id: orderId,
+                    user: req.user.id
+                }).populate('items.product'),
+                session
+            );
+
+            if (!orderRecord) {
+                throw buildError('Order not found', 404);
+            }
+
+            if (orderRecord.status === 'Cancelled') {
+                throw buildError('Cancelled orders cannot be paid', 400);
+            }
+
+            if (orderRecord.paymentMethod !== 'Stripe') {
+                throw buildError('This order is not a Stripe payment order', 400);
+            }
+
+            if (orderRecord.paymentStatus === 'paid') {
+                return { order: orderRecord, alreadyPaid: true };
+            }
+
+            const expectedGatewayAmount = Math.round((orderRecord.gatewayAmount || orderRecord.totalAmount) * 100);
+            if (paymentIntent.amount_received < expectedGatewayAmount) {
+                throw buildError('Stripe payment amount mismatch', 400);
+            }
+
+            orderRecord.paymentResult = {
+                ...orderRecord.paymentResult,
+                id: paymentIntent.id,
+                status: 'paid',
+                update_time: new Date().toISOString(),
+                email_address: paymentIntent.receipt_email || orderRecord.paymentResult?.email_address || ''
+            };
+            orderRecord.paymentStatus = 'paid';
+            orderRecord.status = 'Processing';
+
+            if (!orderRecord.inventoryAdjusted) {
+                await ensureStockAvailable(orderRecord.items, session);
+                await decreaseStockForOrderItems(orderRecord.items, session);
+                orderRecord.inventoryAdjusted = true;
+            }
+
+            await saveWithSession(orderRecord, session);
+            await withSession(Cart.findOneAndDelete({ user: req.user.id }), session);
+
+            return {
+                order: orderRecord,
+                alreadyPaid: false
+            };
+        });
+
+        if (!alreadyPaid) {
+            await sendOrderConfirmationEmail(order, req.user);
+        }
+
+        return sendResponse(
+            res,
+            200,
+            true,
+            alreadyPaid ? 'Payment already verified' : 'Stripe payment verified and order placed successfully',
+            order
+        );
     } catch (err) {
         next(err);
     }
@@ -257,14 +602,15 @@ exports.getRazorpayOrderForPendingOrder = async (req, res, next) => {
         const order = await Order.findOne({
             _id: req.params.id,
             user: req.user.id,
-            status: { $regex: /^pending$/i } // Case-insensitive check
+            status: 'Pending',
+            paymentMethod: 'Razorpay'
         });
 
         if (!order) {
-            return sendResponse(res, 404, false, 'Pending order not found');
+            return sendResponse(res, 404, false, 'Pending Razorpay order not found');
         }
 
-        if (order.paymentResult?.status === 'paid') {
+        if (order.paymentStatus === 'paid') {
             return sendResponse(res, 400, false, 'Order is already paid');
         }
 
@@ -272,28 +618,25 @@ exports.getRazorpayOrderForPendingOrder = async (req, res, next) => {
             return sendResponse(res, 500, false, 'Razorpay is not configured on the server');
         }
 
-        const amount = Math.round(order.totalAmount * 100);
-        if (!amount || amount < 100) { // Razorpay minimum amount is 100 paise (R 1)
-            return sendResponse(res, 400, false, `Invalid order amount: ${order.totalAmount}`);
+        const gatewayAmount = order.gatewayAmount || order.totalAmount;
+        const amount = Math.round(gatewayAmount * 100);
+        if (!amount || amount < 100) {
+            return sendResponse(res, 400, false, `Invalid order amount: ${gatewayAmount}`);
         }
 
         const options = {
-            amount: amount,
+            amount,
             currency: 'INR',
             receipt: `rcpt_${order._id.toString().slice(-10)}_${Date.now()}`.slice(0, 40)
         };
 
-        console.log('Razorpay Order Options:', options);
         const razorpayOrder = await instance.orders.create(options);
 
-        // Ensure paymentResult object exists
-        if (!order.paymentResult) {
-            order.paymentResult = {};
-        }
-
-        // Update the order with new razorpay_order_id
-        order.paymentResult.razorpay_order_id = razorpayOrder.id;
-        order.markModified('paymentResult'); // Ensure Mongoose detects the nested change
+        order.paymentResult = {
+            ...order.paymentResult,
+            razorpay_order_id: razorpayOrder.id,
+            status: 'pending'
+        };
         await order.save();
 
         return sendResponse(res, 200, true, 'Razorpay order re-created', {
@@ -341,7 +684,7 @@ exports.getOrderInvoice = async (req, res, next) => {
 };
 
 // @desc    Get logged in user orders
-// @route   GET /api/v1/orders
+// @route   GET /api/orders
 // @access  Private
 exports.getMyOrders = async (req, res, next) => {
     try {
@@ -355,7 +698,7 @@ exports.getMyOrders = async (req, res, next) => {
 };
 
 // @desc    Get all orders (Admin)
-// @route   GET /api/v1/orders/admin
+// @route   GET /api/orders/admin
 // @access  Private/Admin
 exports.getAllOrders = async (req, res, next) => {
     try {
@@ -374,74 +717,190 @@ exports.getAllOrders = async (req, res, next) => {
 // @access  Private
 exports.cancelMyOrder = async (req, res, next) => {
     try {
-        const order = await Order.findOne({
-            _id: req.params.id,
-            user: req.user.id
-        }).populate('items.product');
+        const cancellation = await runWithOptionalTransaction(async (session) => {
+            const cancelledAt = new Date();
 
-        if (!order) {
-            return sendResponse(res, 404, false, 'Order not found');
-        }
+            const order = await withSession(
+                Order.findOneAndUpdate(
+                    {
+                        _id: req.params.id,
+                        user: req.user.id,
+                        status: { $in: ['Pending', 'Processing'] }
+                    },
+                    {
+                        $set: {
+                            status: 'Cancelled',
+                            cancelledAt
+                        }
+                    },
+                    { new: true }
+                ).populate('items.product'),
+                session
+            );
 
-        if (order.status === 'Cancelled') {
-            return sendResponse(res, 200, true, 'Order already cancelled', order);
-        }
+            if (!order) {
+                const existingOrder = await withSession(
+                    Order.findOne({
+                        _id: req.params.id,
+                        user: req.user.id
+                    }),
+                    session
+                );
 
-        if (!['Pending', 'Processing'].includes(order.status)) {
-            return sendResponse(res, 400, false, 'This order cannot be cancelled now');
-        }
+                if (!existingOrder) {
+                    throw buildError('Order not found', 404);
+                }
 
-        const shouldRestoreStock = ['COD', 'paid', 'Marked as Paid'].includes(order.paymentResult?.status);
-        if (shouldRestoreStock) {
-            await restoreStockForOrder(order);
-        }
+                if (existingOrder.status === 'Cancelled') {
+                    throw buildError('Order is already cancelled', 409);
+                }
 
-        order.status = 'Cancelled';
-        await order.save();
+                throw buildError('Only orders before shipping can be cancelled', 400);
+            }
 
-        return sendResponse(res, 200, true, 'Order cancelled successfully', order);
+            let walletCredited = getCancellationWalletCreditAmount(order);
+            walletCredited = Number(walletCredited.toFixed(2));
+
+            if (walletCredited > 0) {
+                await creditWallet(
+                    {
+                        userId: order.user,
+                        amount: walletCredited,
+                        reason: `Refund for cancelled order ${order._id}`,
+                        orderId: order._id,
+                        meta: {
+                            source: 'order_cancellation',
+                            paymentStatus: order.paymentStatus,
+                            paymentMethod: order.paymentMethod
+                        }
+                    },
+                    { session }
+                );
+
+                order.walletRefundedAmount = walletCredited;
+            }
+
+            if (order.inventoryAdjusted) {
+                await restoreStockForOrder(order, session);
+                order.inventoryAdjusted = false;
+            }
+
+            await saveWithSession(order, session);
+
+            return {
+                order,
+                walletCredited
+            };
+        });
+
+        const message = cancellation.walletCredited > 0
+            ? `Order cancelled. Rs ${cancellation.walletCredited.toFixed(2)} credited to wallet`
+            : 'Order cancelled successfully';
+
+        return sendResponse(res, 200, true, message, cancellation.order);
     } catch (err) {
         next(err);
     }
 };
 
 // @desc    Update order status
-// @route   PUT /api/v1/orders/:id
+// @route   PUT /api/orders/:id
 // @access  Private/Admin
 exports.updateOrderStatus = async (req, res, next) => {
     try {
         const { status } = req.body;
-        const order = await Order.findById(req.params.id).populate('items.product');
+        const allowedStatuses = ['Pending', 'Processing', 'Shipped', 'Delivered', 'Cancelled'];
 
-        if (!order) {
-            return sendResponse(res, 404, false, 'Order not found');
+        if (!allowedStatuses.includes(status)) {
+            return sendResponse(res, 400, false, 'Invalid order status');
         }
 
-        const oldStatus = order.status;
-        if (status === 'Cancelled' && oldStatus !== 'Cancelled') {
-            const shouldRestoreStock = ['COD', 'paid', 'Marked as Paid'].includes(order.paymentResult?.status);
-            if (shouldRestoreStock) {
-                await restoreStockForOrder(order);
+        const result = await runWithOptionalTransaction(async (session) => {
+            const order = await withSession(
+                Order.findById(req.params.id).populate('items.product'),
+                session
+            );
+
+            if (!order) {
+                throw buildError('Order not found', 404);
             }
-        }
 
-        // If admin manually updates a Pending order to Processing (mark as paid), decrease stock
-        if (oldStatus === 'Pending' && status === 'Processing') {
-            for (const item of order.items) {
-                const productId = item.product?._id || item.product;
-                const product = await Product.findById(productId);
-                if (product) {
-                    product.stock = Math.max(0, product.stock - item.quantity);
-                    await product.save();
+            const oldStatus = order.status;
+
+            if (oldStatus === 'Cancelled' && status !== 'Cancelled') {
+                throw buildError('Cancelled order status cannot be changed', 400);
+            }
+
+            if (status === 'Cancelled') {
+                if (oldStatus === 'Cancelled') {
+                    return { order, walletCredited: 0 };
                 }
+
+                if (!['Pending', 'Processing'].includes(oldStatus)) {
+                    throw buildError('Only orders before shipping can be cancelled', 400);
+                }
+
+                order.status = 'Cancelled';
+                order.cancelledAt = new Date();
+
+                let walletCredited = getCancellationWalletCreditAmount(order);
+                walletCredited = Number(walletCredited.toFixed(2));
+
+                if (walletCredited > 0) {
+                    await creditWallet(
+                        {
+                            userId: order.user,
+                            amount: walletCredited,
+                            reason: `Admin cancellation refund for order ${order._id}`,
+                            orderId: order._id,
+                            createdBy: req.user.id,
+                            meta: {
+                                source: 'admin_order_cancellation',
+                                paymentStatus: order.paymentStatus,
+                                paymentMethod: order.paymentMethod
+                            }
+                        },
+                        { session }
+                    );
+
+                    order.walletRefundedAmount = walletCredited;
+                }
+
+                if (order.inventoryAdjusted) {
+                    await restoreStockForOrder(order, session);
+                    order.inventoryAdjusted = false;
+                }
+
+                await saveWithSession(order, session);
+                return { order, walletCredited };
             }
-            order.paymentResult.status = 'Marked as Paid';
-        }
 
-        order.status = status;
-        await order.save();
+            // If admin moves pending order to processing, mark as paid and reserve stock.
+            if (oldStatus === 'Pending' && status === 'Processing') {
+                if (!order.inventoryAdjusted) {
+                    await ensureStockAvailable(order.items, session);
+                    await decreaseStockForOrderItems(order.items, session);
+                    order.inventoryAdjusted = true;
+                }
 
-        return sendResponse(res, 200, true, 'Order status updated', order);
+                order.paymentStatus = 'paid';
+                order.paymentResult = {
+                    ...order.paymentResult,
+                    status: 'Marked as Paid',
+                    update_time: new Date().toISOString()
+                };
+            }
+
+            order.status = status;
+            await saveWithSession(order, session);
+
+            return {
+                order,
+                walletCredited: 0
+            };
+        });
+
+        return sendResponse(res, 200, true, 'Order status updated', result.order);
     } catch (err) {
         next(err);
     }
