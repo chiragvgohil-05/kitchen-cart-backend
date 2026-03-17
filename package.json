@@ -1,7 +1,7 @@
 {
-  "name": "kitchen-cart-backend",
+  "name": "snowera-cafe-backend",
   "version": "1.0.0",
-  "description": "Backend for Kitchen Cart E-commerce",
+  "description": "Backend for SnowEra Cafe - Modern Premium Cafe Management System",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -26,6 +26,7 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.0.3",
     "morgan": "^1.10.0",
+    "multer": "^2.0.2",
     "nodemailer": "^6.9.7",
     "pdfkit": "^0.14.0",
     "razorpay": "^2.9.2"
