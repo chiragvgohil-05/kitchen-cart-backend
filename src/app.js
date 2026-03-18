@@ -47,6 +47,8 @@ const orderRoutes = require('./routes/orderRoutes');
 const contactRoutes = require('./routes/contactRoutes');
 const userRoutes = require('./routes/userRoutes');
 const walletRoutes = require('./routes/walletRoutes');
+const tableRoutes = require('./routes/tableRoutes');
+const bookingRoutes = require('./routes/bookingRoutes');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/categories', categoryRoutes);
@@ -57,6 +59,8 @@ app.use('/api/orders', orderRoutes);
 app.use('/api/contact', contactRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/wallet', walletRoutes);
+app.use('/api/tables', tableRoutes);
+app.use('/api/bookings', bookingRoutes);
 
 // Error Handler (Must be last middleware)
 app.use(errorHandler);
