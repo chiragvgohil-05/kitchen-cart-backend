@@ -126,7 +126,7 @@ const decreaseStockForOrderItems = async (orderItems, session = null) => {
 
         const updated = await withSession(
             Product.findOneAndUpdate(
-                { _id: productId, stock: { $get: item.quantity } },
+                { _id: productId, stock: { $gte: item.quantity } },
                 { $inc: { stock: -item.quantity } },
                 { new: true }
             ),
