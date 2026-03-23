@@ -7,7 +7,8 @@ const sendResponse = require('../utils/responseHandler');
 exports.submitContact = async (req, res, next) => {
     try {
         const contact = await Contact.create(req.body);
-        sendResponse(res, 201, true, 'Message submitted successfully', contact);
+        sendResponse(res, 201, true, 'Your message has been successfully received. Our team will contact you shortly.', contact);
+
     } catch (err) {
         next(err);
     }

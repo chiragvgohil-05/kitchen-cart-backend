@@ -13,7 +13,8 @@ exports.getWishlist = async (req, res, next) => {
             wishlist = await Wishlist.create({ user: req.user.id, products: [] });
         }
 
-        sendResponse(res, 200, true, 'Wishlist fetched successfully', wishlist);
+        sendResponse(res, 200, true, 'Your favorites list has been retrieved successfully.', wishlist);
+
     } catch (err) {
         next(err);
     }
@@ -28,8 +29,9 @@ exports.addToWishlist = async (req, res, next) => {
 
         const product = await Product.findById(productId);
         if (!product) {
-            return sendResponse(res, 404, false, 'Product not found');
+            return sendResponse(res, 404, false, 'The requested product could not be found.');
         }
+
 
         let wishlist = await Wishlist.findOne({ user: req.user.id });
 
@@ -47,7 +49,8 @@ exports.addToWishlist = async (req, res, next) => {
         }
 
         const populatedWishlist = await Wishlist.findById(wishlist._id).populate('products');
-        sendResponse(res, 200, true, 'Item added to wishlist', populatedWishlist);
+        sendResponse(res, 200, true, 'Product successfully added to your favorites list.', populatedWishlist);
+
     } catch (err) {
         next(err);
     }
@@ -61,8 +64,9 @@ exports.removeFromWishlist = async (req, res, next) => {
         const wishlist = await Wishlist.findOne({ user: req.user.id });
 
         if (!wishlist) {
-             return sendResponse(res, 404, false, 'Wishlist not found');
+             return sendResponse(res, 404, false, 'Your favorites list could not be located.');
         }
+
 
         wishlist.products = wishlist.products.filter(
             id => id.toString() !== req.params.productId
@@ -70,7 +74,8 @@ exports.removeFromWishlist = async (req, res, next) => {
         await wishlist.save();
 
         const populatedWishlist = await Wishlist.findById(wishlist._id).populate('products');
-        sendResponse(res, 200, true, 'Item removed from wishlist', populatedWishlist);
+        sendResponse(res, 200, true, 'Product successfully removed from your favorites list.', populatedWishlist);
+
     } catch (err) {
         next(err);
     }

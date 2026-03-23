@@ -7,7 +7,7 @@ const sendResponse = require('../utils/responseHandler');
 exports.getUsers = async (req, res, next) => {
     try {
         const users = await User.find().sort({ createdAt: -1 });
-        sendResponse(res, 200, true, 'Users fetched successfully', users);
+        sendResponse(res, 200, true, 'Customer and staff directory retrieved successfully.', users);
     } catch (err) {
         next(err);
     }
@@ -21,17 +21,17 @@ exports.deleteUser = async (req, res, next) => {
         const user = await User.findById(req.params.id);
 
         if (!user) {
-            return sendResponse(res, 404, false, 'User not found');
+            return sendResponse(res, 404, false, 'The specified user account could not be found.');
         }
 
         // Prevent admin from deleting themselves
         if (user._id.toString() === req.user.id.toString()) {
-            return sendResponse(res, 400, false, 'You cannot delete yourself');
+            return sendResponse(res, 400, false, 'For security reasons, you cannot delete your own administrative account.');
         }
 
         await User.findByIdAndDelete(req.params.id);
 
-        sendResponse(res, 200, true, 'User deleted successfully');
+        sendResponse(res, 200, true, 'User account has been permanently removed from the system.');
     } catch (err) {
         next(err);
     }
@@ -46,26 +46,25 @@ exports.updateUserRole = async (req, res, next) => {
 
         const allowedRoles = ['user', 'staff', 'admin'];
         if (!role || !allowedRoles.includes(role)) {
-            return sendResponse(res, 400, false, `Invalid role. Must be one of: ${allowedRoles.join(', ')}`);
+            return sendResponse(res, 400, false, `The provided role is invalid. Please choose from: ${allowedRoles.join(', ')}.`);
         }
 
         const user = await User.findById(req.params.id);
 
         if (!user) {
-            return sendResponse(res, 404, false, 'User not found');
+            return sendResponse(res, 404, false, 'The specified user account could not be found.');
         }
 
         // Prevent admin from changing their own role
         if (user._id.toString() === req.user.id.toString()) {
-            return sendResponse(res, 400, false, 'You cannot change your own role');
+            return sendResponse(res, 400, false, 'You are not permitted to modify your own account\'s access level.');
         }
 
         user.role = role;
         await user.save();
 
-        sendResponse(res, 200, true, `User role updated to ${role}`, { _id: user._id, name: user.name, email: user.email, role: user.role });
+        sendResponse(res, 200, true, `Successfully updated the user's access level to ${role}.`, { _id: user._id, name: user.name, email: user.email, role: user.role });
     } catch (err) {
         next(err);
     }
 };
-

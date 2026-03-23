@@ -65,7 +65,16 @@ const orderSchema = new mongoose.Schema({
         zipCode: String,
         country: String
     },
+    reward: {
+        type: mongoose.Schema.ObjectId,
+        ref: 'Reward'
+    },
+    discountAmount: {
+        type: Number,
+        default: 0
+    },
     paymentResult: {
+
         id: String,
         status: String,
         update_time: String,

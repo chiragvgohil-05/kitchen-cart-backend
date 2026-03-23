@@ -10,7 +10,11 @@ const createInvoice = require('../utils/invoiceGenerator');
 const sendResponse = require('../utils/responseHandler');
 const { creditWallet, debitWallet } = require('../services/walletService');
 const { runWithOptionalTransaction } = require('../services/transactionService');
+const { addPointsForOrder, redeemRewardDuringCheckout } = require('../services/loyaltyService');
+const Reward = require('../models/rewardModel');
+
 const path = require('path');
+
 const fs = require('fs');
 
 let stripeClient = null;
@@ -111,11 +115,11 @@ const ensureStockAvailable = async (orderItems, session = null) => {
         );
 
         if (!product) {
-            throw buildError('One or more products are no longer available', 400);
+            throw buildError('One or more products in your order are no longer available in our inventory.', 400);
         }
 
         if (product.stock < item.quantity) {
-            throw buildError(`Insufficient stock for ${product.name}`, 400);
+            throw buildError(`Insufficient stock available for ${product.name}.`, 400);
         }
     }
 };
@@ -134,7 +138,7 @@ const decreaseStockForOrderItems = async (orderItems, session = null) => {
         );
 
         if (!updated) {
-            throw buildError('Unable to reserve stock', 400);
+            throw buildError('An error occurred while reserving stock for your order. Please try again.', 400);
         }
     }
 };
@@ -193,7 +197,7 @@ const sendOrderConfirmationEmail = async (order, user) => {
 // @desc    Create new order
 exports.createOrder = async (req, res, next) => {
     try {
-        const { orderType, table } = req.body;
+        const { orderType, table, rewardId } = req.body;
         const paymentMethod = getValidPaymentMethod(req.body.paymentMethod);
         const shouldUseWallet = paymentMethod !== 'COD' && req.body.useWallet !== false;
         
@@ -201,18 +205,20 @@ exports.createOrder = async (req, res, next) => {
         if (orderType === 'Delivery') {
             shippingAddress = getProfileAddressForOrder(req.user);
             if (!isAddressComplete(shippingAddress)) {
-                return sendResponse(res, 400, false, 'Please add complete address for delivery');
+                return sendResponse(res, 400, false, 'Valid shipping coordinates are required for delivery logistics.');
             }
+
         }
 
         if (orderType === 'Dine-in' && !table) {
-            return sendResponse(res, 400, false, 'Please select a table for dine-in');
+            return sendResponse(res, 400, false, 'Please specify a table number for your dine-in experience.');
         }
 
         const cart = await Cart.findOne({ user: req.user.id }).populate('items.product');
         if (!cart || cart.items.length === 0) {
-            return sendResponse(res, 400, false, 'No items in cart');
+            return sendResponse(res, 400, false, 'Cart is empty. Please select items from our curated menu.');
         }
+
 
         const orderItems = cart.items
             .filter(item => item.product)
@@ -222,47 +228,59 @@ exports.createOrder = async (req, res, next) => {
                 price: item.product.sellingPrice || 0
             }));
 
-        const totalAmount = Number(orderItems.reduce((sum, item) => sum + (item.price * item.quantity), 0).toFixed(2));
+        const totalAmountBeforeDiscount = Number(orderItems.reduce((sum, item) => sum + (item.price * item.quantity), 0).toFixed(2));
+        
+        let appliedReward = null;
+        if (rewardId) {
+            const reward = await Reward.findById(rewardId);
+            if (!reward || !reward.isActive) {
+                return sendResponse(res, 400, false, 'The selected reward is invalid or expired.');
+            }
+            const userForLoyalty = await User.findById(req.user.id).select('loyaltyPoints');
+            if (!userForLoyalty || userForLoyalty.loyaltyPoints < reward.pointsRequired) {
+                return sendResponse(res, 400, false, `Your loyalty balance is insufficient for this redemption. (Required: ${reward.pointsRequired})`);
+            }
 
-        let walletUsed = 0;
-        if (shouldUseWallet) {
-            const userForWallet = await User.findById(req.user.id).select('walletBalance');
-            walletUsed = Math.min(userForWallet?.walletBalance || 0, totalAmount);
+            appliedReward = reward;
         }
 
-        const gatewayAmount = Number(Math.max(0, totalAmount - walletUsed).toFixed(2));
+        // We need to calculate these values, but some depend on the transaction (reward redemption)
+        // However, for Razorpay, we need a gatewayAmount before the final response.
+        // We'll perform redemptions inside the transaction.
 
-        let razorpayOrder = null;
-        if (paymentMethod === 'Razorpay' && gatewayAmount > 0) {
-            const amountInPaise = Math.round(gatewayAmount * 100);
-            razorpayOrder = await instance.orders.create({
-                amount: amountInPaise,
-                currency: 'INR',
-                receipt: `rcpt_${Date.now()}`
-            });
-        }
-
-        const createdOrder = await runWithOptionalTransaction(async (session) => {
+        const result = await runWithOptionalTransaction(async (session) => {
             await ensureStockAvailable(orderItems, session);
 
+            let currentDiscount = 0;
+            let finalAmount = totalAmountBeforeDiscount;
+
+            if (appliedReward) {
+                const loyaltyResult = await redeemRewardDuringCheckout({
+                    userId: req.user.id,
+                    reward: appliedReward,
+                    orderAmount: totalAmountBeforeDiscount
+                }, session);
+                currentDiscount = loyaltyResult.discount;
+                finalAmount = loyaltyResult.final_amount;
+            }
+
+            let walletUsed = 0;
+            if (shouldUseWallet) {
+                const userForWallet = await User.findById(req.user.id).session(session).select('walletBalance');
+                walletUsed = Math.min(userForWallet?.walletBalance || 0, finalAmount);
+            }
+
+            const gatewayAmount = Number(Math.max(0, finalAmount - walletUsed).toFixed(2));
             const fullWalletPayment = paymentMethod !== 'COD' && gatewayAmount === 0;
             const effectivePaymentMethod = fullWalletPayment ? 'Wallet' : paymentMethod;
             const isImmediateOrder = paymentMethod === 'COD' || fullWalletPayment;
 
-            const paymentResult = {};
-            if (paymentMethod === 'COD') {
-                paymentResult.status = 'COD';
-            } else if (paymentMethod === 'Razorpay' && razorpayOrder) {
-                paymentResult.razorpay_order_id = razorpayOrder.id;
-                paymentResult.status = 'pending';
-            } else if (fullWalletPayment) {
-                paymentResult.status = 'Wallet';
-            }
+            const paymentResult = { status: paymentMethod === 'COD' ? 'COD' : (fullWalletPayment ? 'Wallet' : 'pending') };
 
             const order = await createOrderDocument({
                 user: req.user.id,
                 items: orderItems,
-                totalAmount,
+                totalAmount: finalAmount,
                 orderType: orderType || 'Takeaway',
                 table: orderType === 'Dine-in' ? table : undefined,
                 paymentMethod: effectivePaymentMethod,
@@ -270,6 +288,8 @@ exports.createOrder = async (req, res, next) => {
                 walletUsed,
                 gatewayAmount,
                 shippingAddress,
+                reward: appliedReward?._id,
+                discountAmount: currentDiscount,
                 paymentResult,
                 status: isImmediateOrder ? 'Confirmed' : 'Pending'
             }, session);
@@ -290,22 +310,43 @@ exports.createOrder = async (req, res, next) => {
                 await withSession(Cart.findOneAndDelete({ user: req.user.id }), session);
             }
 
-            return order;
+            return { order, gatewayAmount };
         });
 
+        const { order, gatewayAmount } = result;
+
+        // If Razorpay is needed, we create the gateway order AFTER the local order is committed 
+        // OR we can do it inside but it's risky if Razorpay succeeds but local transaction fails.
+        // Actually, the previous code created it before. Let's create it now.
+        let razorpayOrder = null;
         if (paymentMethod === 'Razorpay' && gatewayAmount > 0) {
-            return sendResponse(res, 201, true, 'Razorpay order created', {
-                order: createdOrder,
+            const amountInPaise = Math.round(gatewayAmount * 100);
+            razorpayOrder = await instance.orders.create({
+                amount: amountInPaise,
+                currency: 'INR',
+                receipt: `rcpt_${order._id}`
+            });
+            
+            // Update order with razorpay_order_id
+            order.paymentResult.razorpay_order_id = razorpayOrder.id;
+            await order.save();
+        }
+
+        if (razorpayOrder) {
+            return sendResponse(res, 201, true, 'Payment gateway order initialized.', {
+                order,
                 razorpayOrder,
+                gatewayAmount,
                 razorpayKeyId: process.env.RAZORPAY_KEY_ID
             });
         }
 
-        return sendResponse(res, 201, true, 'Order placed successfully', { order: createdOrder });
+        return sendResponse(res, 201, true, 'Your order has been placed successfully. Thank you for choosing SnowEra Cafe!', { order });
     } catch (err) {
         next(err);
     }
 };
+
 
 // @desc    Update order status (By Staff/Admin)
 exports.updateOrderStatus = async (req, res, next) => {
@@ -314,17 +355,17 @@ exports.updateOrderStatus = async (req, res, next) => {
         const allowedStatuses = ['Pending', 'Confirmed', 'Preparing', 'Ready', 'Served', 'Shipped', 'Delivered', 'Cancelled'];
 
         if (!allowedStatuses.includes(status)) {
-            return sendResponse(res, 400, false, 'Invalid order status');
+            return sendResponse(res, 400, false, 'The provided order status is not valid.');
         }
 
         const result = await runWithOptionalTransaction(async (session) => {
             const order = await withSession(Order.findById(req.params.id).populate('items.product'), session);
-            if (!order) throw buildError('Order not found', 404);
+            if (!order) throw buildError('The specified order record could not be found.', 404);
 
             const oldStatus = order.status;
 
             if (oldStatus === 'Cancelled' && status !== 'Cancelled') {
-                throw buildError('Cancelled order status cannot be changed', 400);
+                throw buildError('The status of a cancelled order cannot be modified.', 400);
             }
 
             if (status === 'Cancelled') {
@@ -357,23 +398,32 @@ exports.updateOrderStatus = async (req, res, next) => {
                          order.paymentStatus = 'paid';
                     }
                 }
+                
+                // Loyalty Points Logic
+                const isNewlyCompleted = (status === 'Delivered' || status === 'Served') && 
+                                       (oldStatus !== 'Delivered' && oldStatus !== 'Served');
+                
+                if (isNewlyCompleted && order.user) {
+                    await addPointsForOrder({
+                        userId: order.user,
+                        orderId: order._id,
+                        amount: order.totalAmount
+                    }, session);
+                }
+
                 order.status = status;
             }
+
 
             await saveWithSession(order, session);
             return { order };
         });
 
-        return sendResponse(res, 200, true, 'Order status updated', result.order);
+        return sendResponse(res, 200, true, 'The order status has been successfully updated.', result.order);
     } catch (err) {
         next(err);
     }
 };
-
-// ... existing methods like getMyOrders, getAllOrders, getOrderInvoice, verifyPayment ...
-// For brevity, I'll only keep the modified parts and assume the rest are there as they were.
-// Actually, it's better to rewrite the whole file to ensure nothing is broken.
-// I'll append the rest of the functions from previous read.
 
 exports.verifyPayment = async (req, res, next) => {
     try {
@@ -381,11 +431,11 @@ exports.verifyPayment = async (req, res, next) => {
         const body = `${razorpay_order_id}|${razorpay_payment_id}`;
         const expectedSignature = crypto.createHmac('sha256', process.env.RAZORPAY_SECRET).update(body).digest('hex');
 
-        if (expectedSignature !== razorpay_signature) return sendResponse(res, 400, false, 'Invalid signature');
+        if (expectedSignature !== razorpay_signature) return sendResponse(res, 400, false, 'Payment verification failed due to an invalid security signature.');
 
         const { order } = await runWithOptionalTransaction(async (session) => {
             const orderRecord = await withSession(Order.findOne({ _id: orderId, user: req.user.id }).populate('items.product'), session);
-            if (!orderRecord) throw buildError('Order not found', 404);
+            if (!orderRecord) throw buildError('The specified order record could not be found.', 404);
             
             orderRecord.paymentStatus = 'paid';
             orderRecord.status = 'Confirmed';
@@ -400,28 +450,28 @@ exports.verifyPayment = async (req, res, next) => {
         });
 
         await sendOrderConfirmationEmail(order, req.user);
-        return sendResponse(res, 200, true, 'Payment verified', order);
+        return sendResponse(res, 200, true, 'Your payment has been successfully verified, and the order is confirmed.', order);
     } catch (err) { next(err); }
 };
 
 exports.getMyOrders = async (req, res, next) => {
     try {
         const orders = await Order.find({ user: req.user.id }).sort({ createdAt: -1 }).populate('items.product').populate('table');
-        sendResponse(res, 200, true, 'Orders fetched', orders);
+        sendResponse(res, 200, true, 'Your order history has been retrieved successfully.', orders);
     } catch (err) { next(err); }
 };
 
 exports.getAllOrders = async (req, res, next) => {
     try {
         const orders = await Order.find().sort({ createdAt: -1 }).populate('user', 'name email').populate('items.product').populate('table');
-        sendResponse(res, 200, true, 'All orders fetched', orders);
+        sendResponse(res, 200, true, 'All system orders have been retrieved successfully.', orders);
     } catch (err) { next(err); }
 };
 
 exports.getOrderInvoice = async (req, res, next) => {
     try {
         const order = await Order.findById(req.params.id).populate('items.product').populate('user', 'name email');
-        if (!order) return sendResponse(res, 404, false, 'Order not found');
+        if (!order) return sendResponse(res, 404, false, 'The specified order record could not be found.');
         const { invoiceName, invoicePath } = await ensureInvoiceForOrder(order);
         return res.download(invoicePath, invoiceName);
     } catch (err) { next(err); }
@@ -436,7 +486,7 @@ exports.cancelMyOrder = async (req, res, next) => {
                 { new: true }
             ).populate('items.product'), session);
 
-            if (!order) throw buildError('Order cannot be cancelled', 400);
+            if (!order) throw buildError('This order is either already processed or does not exist, and cannot be cancelled.', 400);
 
             let walletCredited = getCancellationWalletCreditAmount(order);
             if (walletCredited > 0) {
@@ -451,7 +501,7 @@ exports.cancelMyOrder = async (req, res, next) => {
             return { order, walletCredited };
         });
 
-        return sendResponse(res, 200, true, 'Order cancelled', result.order);
+        return sendResponse(res, 200, true, 'Your order has been successfully cancelled, and any applicable refund has been initiated.', result.order);
     } catch (err) { next(err); }
 };
 
@@ -459,14 +509,14 @@ exports.verifyStripePayment = async (req, res, next) => {
     try {
         const { sessionId, orderId } = req.body;
         const stripe = getStripeClient();
-        if (!stripe) return sendResponse(res, 400, false, 'Stripe not configured');
+        if (!stripe) return sendResponse(res, 400, false, 'Stripe payment system is currently not configured.');
 
         const session = await stripe.checkout.sessions.retrieve(sessionId);
-        if (session.payment_status !== 'paid') return sendResponse(res, 400, false, 'Payment not completed');
+        if (session.payment_status !== 'paid') return sendResponse(res, 400, false, 'We could not confirm your payment. Please check your transaction status.');
 
         const { order } = await runWithOptionalTransaction(async (dbSession) => {
             const orderRecord = await withSession(Order.findOne({ _id: orderId, user: req.user.id }).populate('items.product'), dbSession);
-            if (!orderRecord) throw buildError('Order not found', 404);
+            if (!orderRecord) throw buildError('The specified order record could not be found.', 404);
             
             orderRecord.paymentStatus = 'paid';
             orderRecord.status = 'Confirmed';
@@ -481,16 +531,16 @@ exports.verifyStripePayment = async (req, res, next) => {
         });
 
         await sendOrderConfirmationEmail(order, req.user);
-        return sendResponse(res, 200, true, 'Stripe payment verified', order);
+        return sendResponse(res, 200, true, 'Your Stripe payment has been successfully verified, and the order is confirmed.', order);
     } catch (err) { next(err); }
 };
 
 exports.getRazorpayOrderForPendingOrder = async (req, res, next) => {
     try {
         const order = await Order.findOne({ _id: req.params.id, user: req.user.id, status: 'Pending' });
-        if (!order) return sendResponse(res, 404, false, 'Eligible order not found');
+        if (!order) return sendResponse(res, 404, false, 'Eligible order not found.');
 
-        if (order.gatewayAmount <= 0) return sendResponse(res, 400, false, 'No payment required');
+        if (order.gatewayAmount <= 0) return sendResponse(res, 400, false, 'No payment required for this order.');
 
         const amountInPaise = Math.round(order.gatewayAmount * 100);
         const razorpayOrder = await instance.orders.create({
@@ -499,7 +549,7 @@ exports.getRazorpayOrderForPendingOrder = async (req, res, next) => {
             receipt: `rcpt_retry_${order._id}_${Date.now()}`
         });
 
-        return sendResponse(res, 200, true, 'Razorpay retry order created', {
+        return sendResponse(res, 200, true, 'Retry payment initialized successfully.', {
             razorpayOrder,
             order,
             razorpayKeyId: process.env.RAZORPAY_KEY_ID

@@ -1,40 +1,34 @@
 const Table = require('../models/tableModel');
+const sendResponse = require('../utils/responseHandler');
 
 // @desc    Get all tables
 // @route   GET /api/tables
 // @access  Public
-exports.getTables = async (req, res) => {
+exports.getTables = async (req, res, next) => {
     try {
         const tables = await Table.find().sort('tableNumber');
-        res.status(200).json({
-            success: true,
-            count: tables.length,
-            data: tables
-        });
+        sendResponse(res, 200, true, 'Table layout and status information retrieved successfully.', tables);
     } catch (err) {
-        res.status(400).json({ success: false, message: err.message });
+        next(err);
     }
 };
 
 // @desc    Create a new table
 // @route   POST /api/tables
 // @access  Admin
-exports.createTable = async (req, res) => {
+exports.createTable = async (req, res, next) => {
     try {
         const table = await Table.create(req.body);
-        res.status(201).json({
-            success: true,
-            data: table
-        });
+        sendResponse(res, 201, true, 'Successfully added a new table to the restaurant layout.', table);
     } catch (err) {
-        res.status(400).json({ success: false, message: err.message });
+        next(err);
     }
 };
 
 // @desc    Update a table
 // @route   PUT /api/tables/:id
 // @access  Admin
-exports.updateTable = async (req, res) => {
+exports.updateTable = async (req, res, next) => {
     try {
         const table = await Table.findByIdAndUpdate(req.params.id, req.body, {
             new: true,
@@ -42,34 +36,28 @@ exports.updateTable = async (req, res) => {
         });
 
         if (!table) {
-            return res.status(404).json({ success: false, message: 'Table not found' });
+            return sendResponse(res, 404, false, 'The specified table could not be found in our records.');
         }
 
-        res.status(200).json({
-            success: true,
-            data: table
-        });
+        sendResponse(res, 200, true, 'Table configuration details updated successfully.', table);
     } catch (err) {
-        res.status(400).json({ success: false, message: err.message });
+        next(err);
     }
 };
 
 // @desc    Delete a table
 // @route   DELETE /api/tables/:id
 // @access  Admin
-exports.deleteTable = async (req, res) => {
+exports.deleteTable = async (req, res, next) => {
     try {
         const table = await Table.findByIdAndDelete(req.params.id);
 
         if (!table) {
-            return res.status(404).json({ success: false, message: 'Table not found' });
+            return sendResponse(res, 404, false, 'The specified table could not be found in our records.');
         }
 
-        res.status(200).json({
-            success: true,
-            data: {}
-        });
+        sendResponse(res, 200, true, 'Table has been successfully removed from the system.');
     } catch (err) {
-        res.status(400).json({ success: false, message: err.message });
+        next(err);
     }
 };

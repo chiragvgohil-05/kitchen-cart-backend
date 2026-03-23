@@ -26,12 +26,14 @@ exports.getMyWalletBalance = async (req, res, next) => {
         const user = await User.findById(req.user.id).select('walletBalance');
 
         if (!user) {
-            return sendResponse(res, 404, false, 'User not found');
+            return sendResponse(res, 404, false, 'The specified user account could not be found.');
         }
 
-        return sendResponse(res, 200, true, 'Wallet balance fetched', {
+
+        return sendResponse(res, 200, true, 'Your current wallet balance has been retrieved successfully.', {
             walletBalance: user.walletBalance
         });
+
     } catch (error) {
         next(error);
     }
@@ -58,7 +60,8 @@ exports.getMyWalletTransactions = async (req, res, next) => {
             WalletTransaction.countDocuments(filter)
         ]);
 
-        return sendResponse(res, 200, true, 'Wallet transactions fetched', {
+        return sendResponse(res, 200, true, 'Your wallet transaction history has been retrieved successfully.', {
+
             transactions,
             pagination: {
                 page,
@@ -102,7 +105,8 @@ exports.getAdminWalletTransactions = async (req, res, next) => {
             WalletTransaction.countDocuments(filter)
         ]);
 
-        return sendResponse(res, 200, true, 'Wallet transactions fetched', {
+        return sendResponse(res, 200, true, 'System wallet transactions fetched successfully.', {
+
             transactions,
             pagination: {
                 page,
@@ -124,16 +128,19 @@ exports.adjustWalletBalanceByAdmin = async (req, res, next) => {
         const { userId, type, amount, reason } = req.body;
 
         if (!mongoose.Types.ObjectId.isValid(userId)) {
-            return sendResponse(res, 400, false, 'Invalid userId');
+            return sendResponse(res, 400, false, 'The provided User ID is invalid.');
         }
+
 
         if (!['credit', 'debit'].includes(type)) {
-            return sendResponse(res, 400, false, 'Adjustment type must be credit or debit');
+            return sendResponse(res, 400, false, 'Please specify a valid adjustment type (credit or debit).');
         }
 
+
         if (!reason || typeof reason !== 'string' || !reason.trim()) {
-            return sendResponse(res, 400, false, 'Reason is required for wallet adjustment');
+            return sendResponse(res, 400, false, 'A valid reason must be provided for all manual wallet adjustments.');
         }
+
 
         const result = await runWithOptionalTransaction(async (session) => {
             const user = await withSession(User.findById(userId), session);
@@ -178,7 +185,8 @@ exports.adjustWalletBalanceByAdmin = async (req, res, next) => {
             };
         });
 
-        return sendResponse(res, 200, true, 'Wallet adjusted successfully', {
+        return sendResponse(res, 200, true, 'The account\'s wallet balance has been successfully adjusted.', {
+
             user: {
                 _id: result.user._id,
                 name: result.user.name,
