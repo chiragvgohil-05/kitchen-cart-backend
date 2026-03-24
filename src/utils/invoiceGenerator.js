@@ -27,11 +27,11 @@ function generateHeader(doc) {
     doc.rect(0, 0, doc.page.width, 140).fill('#FAFAFA');
 
     // Accent line at bottom of header
-    doc.rect(0, 140, doc.page.width, 3).fill('#DE9545');
+    doc.rect(0, 140, doc.page.width, 3).fill('#DBAB72');
 
     // Brand Colors
-    const primaryColor = '#38544D';
-    const accentColor = '#DE9545';
+    const primaryColor = '#4E342E';
+    const accentColor = '#DBAB72';
 
     // Logo Icon Background
     const logoPath = path.join(__dirname, '../../public/logo.png');
@@ -43,7 +43,7 @@ function generateHeader(doc) {
         doc.font('Helvetica-Bold')
             .fillColor(accentColor)
             .fontSize(28)
-            .text('KC', 55, 56, { width: 70, align: 'center' });
+            .text('SE', 55, 56, { width: 70, align: 'center' });
     }
 
     // Company Address
@@ -51,22 +51,22 @@ function generateHeader(doc) {
         .font('Helvetica-Bold')
         .fillColor(primaryColor)
         .fontSize(11)
-        .text('Kitchen Cart HQ', 200, 45, { align: 'right' })
+        .text('SnowEra Cafe HQ', 200, 45, { align: 'right' })
         .font('Helvetica')
         .fillColor('#555555')
         .fontSize(10)
-        .text('123 Main Street', 200, 62, { align: 'right' })
-        .text('New York, NY, 10025', 200, 76, { align: 'right' })
+        .text('Industrial Area, Phase 1', 200, 62, { align: 'right' })
+        .text('Chandigarh, India, 160002', 200, 76, { align: 'right' })
         .font('Helvetica-Bold')
         .fillColor(accentColor)
-        .text('support@kitchencart.com', 200, 90, { align: 'right' })
+        .text('hello@snoweracafe.com', 200, 90, { align: 'right' })
         .moveDown();
 }
 
 function generateCustomerInformation(doc, order) {
     const shippingAddress = order.shippingAddress || {};
-    const primaryColor = '#38544D';
-    const bgColor = '#ECECE6';
+    const primaryColor = '#4E342E';
+    const bgColor = '#F5F5F0';
 
     doc.fillColor(primaryColor).fontSize(22).font('Helvetica-Bold').text('INVOICE', 50, 175);
 
@@ -90,7 +90,7 @@ function generateCustomerInformation(doc, order) {
     doc.font('Helvetica').text(paymentStr, 135, 280);
 
     doc.font('Helvetica-Bold').text('Total Due:', 65, 300);
-    doc.font('Helvetica-Bold').fillColor('#DE9545').fontSize(11).text(formatCurrency(order.totalAmount || 0), 135, 299);
+    doc.font('Helvetica-Bold').fillColor('#DBAB72').fontSize(11).text(formatCurrency(order.totalAmount || 0), 135, 299);
 
     // Inside customer box
     doc.fillColor(primaryColor).font('Helvetica-Bold').fontSize(9).text('BILLED TO', 330, 230);
@@ -108,9 +108,9 @@ function generateCustomerInformation(doc, order) {
 
 function generateInvoiceTable(doc, order) {
     let position = 360;
-    const primaryColor = '#38544D';
-    const accentColor = '#DE9545';
-    const bgColor = '#ECECE6';
+    const primaryColor = '#4E342E';
+    const accentColor = '#DBAB72';
+    const bgColor = '#F5F5F0';
 
     // Table Header Background
     doc.roundedRect(50, position, 495, 30, 5).fill(primaryColor);
@@ -178,17 +178,17 @@ function generateFooter(doc) {
     doc.rect(0, doc.page.height - 80, doc.page.width, 1).fill('#EEEEEE');
 
     // Accent line at the bottommost edge
-    doc.rect(0, doc.page.height - 5, doc.page.width, 5).fill('#DE9545');
+    doc.rect(0, doc.page.height - 5, doc.page.width, 5).fill('#DBAB72');
 
     doc
         .font('Helvetica-Bold')
-        .fillColor('#38544D')
+        .fillColor('#4E342E')
         .fontSize(10)
-        .text('Thank you for shopping with Kitchen Cart!', 0, doc.page.height - 55, { align: 'center', width: doc.page.width })
+        .text('Thank you for choosing SnowEra Cafe!', 0, doc.page.height - 55, { align: 'center', width: doc.page.width })
         .font('Helvetica')
         .fillColor('#777777')
         .fontSize(9)
-        .text('For questions concerning this invoice, please contact support@kitchencart.com', 0, doc.page.height - 35, { align: 'center', width: doc.page.width });
+        .text('For questions concerning this invoice, please contact hello@snoweracafe.com', 0, doc.page.height - 35, { align: 'center', width: doc.page.width });
 
     doc.page.margins.bottom = bottomMargin;
 }

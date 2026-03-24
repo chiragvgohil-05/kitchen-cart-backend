@@ -35,26 +35,60 @@ exports.updateUserTier = async (userId, session = null) => {
  * Add loyalty points to a user based on an order.
  */
 exports.addPointsForOrder = async ({ userId, orderId, amount }, session = null) => {
-    // 1 point per 10 currency spent (0.1 points per 1)
-    const pointsToAdd = Math.floor(amount * 0.1); 
+    const user = await User.findById(userId).session(session);
+    if (!user) return;
+
+    // Base rate: 1 point per 10 currency spent
+    let pointsToAdd = Math.floor(amount * 0.1); 
+
+    // Apply Tier Multipliers
+    const multipliers = {
+        'Platinum': 1.5,
+        'Gold': 1.2,
+        'Silver': 1.1,
+        'Bronze': 1.0
+    };
+
+    const multiplier = multipliers[user.loyaltyTier] || 1.0;
+    pointsToAdd = Math.floor(pointsToAdd * multiplier);
+
     if (pointsToAdd <= 0) return;
 
-    const user = await User.findByIdAndUpdate(
-        userId,
-        { $inc: { loyaltyPoints: pointsToAdd } },
-        { session, new: true }
-    );
+    user.loyaltyPoints += pointsToAdd;
+    await user.save({ session });
 
     await LoyaltyTransaction.create([{
         user: userId,
         order: orderId,
         type: 'Earned',
         points: pointsToAdd,
-        reason: `Earned from order #${orderId.toString().slice(-6).toUpperCase()}`
+        reason: `Earned from order #${orderId.toString().slice(-6).toUpperCase()} (${user.loyaltyTier} bonus applied)`
     }], { session });
 
     await this.updateUserTier(userId, session);
     return pointsToAdd;
+};
+
+/**
+ * Add welcome points for new registration
+ */
+exports.addWelcomePoints = async (userId, session = null) => {
+    const welcomePoints = 50;
+    
+    await User.findByIdAndUpdate(
+        userId,
+        { $inc: { loyaltyPoints: welcomePoints } },
+        { session }
+    );
+
+    await LoyaltyTransaction.create([{
+        user: userId,
+        type: 'Earned',
+        points: welcomePoints,
+        reason: 'Welcome bonus for joining our loyalty program!'
+    }], { session });
+
+    await this.updateUserTier(userId, session);
 };
 
 /**

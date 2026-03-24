@@ -30,6 +30,10 @@ exports.register = async (req, res, next) => {
             address
         });
 
+        // Add welcome bonus points!
+        const { addWelcomePoints } = require('../services/loyaltyService');
+        await addWelcomePoints(user._id);
+
         sendTokenResponse(user, 201, res);
     } catch (err) {
         next(err);
