@@ -4,24 +4,32 @@ const bookingSchema = new mongoose.Schema({
     user: {
         type: mongoose.Schema.ObjectId,
         ref: 'User',
-        required: true
+        required: [true, 'Booking must belong to a user']
     },
     table: {
         type: mongoose.Schema.ObjectId,
         ref: 'Table',
-        required: true
+        required: [true, 'Booking must have a table']
     },
     bookingDate: {
         type: Date,
-        required: [true, 'Please add a booking date']
+        required: [true, 'Please provide a booking date']
     },
-    bookingTime: {
+    startTime: {
         type: String,
-        required: [true, 'Please add a booking time']
+        required: [true, 'Please provide a start time']
     },
-    numberOfGuests: {
+    endTime: {
+        type: String,
+        required: [true, 'Please provide an end time']
+    },
+    timeSlot: { // Preserve for legacy compatibility if needed
+        type: String
+    },
+    numberOfPeople: {
         type: Number,
-        required: [true, 'Please add number of guests']
+        required: [true, 'Please specify the number of people'],
+        min: [1, 'There must be at least 1 person']
     },
     status: {
         type: String,
@@ -29,12 +37,27 @@ const bookingSchema = new mongoose.Schema({
         default: 'Pending'
     },
     specialRequests: {
-        type: String
+        type: String,
+        trim: true
     },
     createdAt: {
         type: Date,
         default: Date.now
     }
+}, {
+    timestamps: true
 });
+
+// Alias for frontend compatibility if needed (virtuals)
+bookingSchema.virtual('bookingTime').get(function() { 
+    return this.startTime && this.endTime ? `${this.startTime} - ${this.endTime}` : this.timeSlot; 
+});
+bookingSchema.virtual('numberOfGuests').get(function() { return this.numberOfPeople; });
+bookingSchema.set('toJSON', { virtuals: true });
+bookingSchema.set('toObject', { virtuals: true });
+
+// Remove unique index on timeSlot as we move to range-based overlaps
+// Indexing for faster lookups on these fields
+bookingSchema.index({ table: 1, bookingDate: 1 });
 
 module.exports = mongoose.model('Booking', bookingSchema);

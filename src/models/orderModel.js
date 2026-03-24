@@ -27,6 +27,16 @@ const orderSchema = new mongoose.Schema({
         type: Number,
         required: true
     },
+    orderType: {
+        type: String,
+        enum: ['Dine-in', 'Takeaway', 'Delivery'],
+        default: 'Takeaway'
+    },
+    table: {
+        type: mongoose.Schema.ObjectId,
+        ref: 'Table',
+        required: function() { return this.orderType === 'Dine-in'; }
+    },
     paymentMethod: {
         type: String,
         enum: ['COD', 'Razorpay', 'Stripe', 'Wallet'],
@@ -55,7 +65,16 @@ const orderSchema = new mongoose.Schema({
         zipCode: String,
         country: String
     },
+    reward: {
+        type: mongoose.Schema.ObjectId,
+        ref: 'Reward'
+    },
+    discountAmount: {
+        type: Number,
+        default: 0
+    },
     paymentResult: {
+
         id: String,
         status: String,
         update_time: String,
@@ -67,7 +86,16 @@ const orderSchema = new mongoose.Schema({
     status: {
         type: String,
         required: true,
-        enum: ['Pending', 'Processing', 'Shipped', 'Delivered', 'Cancelled'],
+        enum: [
+            'Pending',      // Order received
+            'Confirmed',    // Payment/Order confirmed
+            'Preparing',    // In kitchen
+            'Ready',        // Ready for serving/pickup
+            'Served',       // Served to table or picked up
+            'Shipped',      // Out for delivery (if Delivery type)
+            'Delivered',    // Delivered (if Delivery type)
+            'Cancelled'
+        ],
         default: 'Pending'
     },
     inventoryAdjusted: {
@@ -87,6 +115,8 @@ const orderSchema = new mongoose.Schema({
         type: Date,
         default: Date.now
     }
+}, {
+    timestamps: true
 });
 
 module.exports = mongoose.model('Order', orderSchema);

@@ -64,7 +64,7 @@ exports.getProducts = async (req, res, next) => {
             pagination.prev = { page: page - 1, limit };
         }
 
-        sendResponse(res, 200, true, 'Products fetched successfully', {
+        sendResponse(res, 200, true, 'Product inventory retrieved successfully.', {
             count: products.length,
             total,
             pagination,
@@ -82,9 +82,9 @@ exports.getProduct = async (req, res, next) => {
     try {
         const product = await Product.findById(req.params.id).populate('category', 'name');
         if (!product) {
-            return sendResponse(res, 404, false, 'Product not found');
+            return sendResponse(res, 404, false, 'The requested product could not be found in our database.');
         }
-        sendResponse(res, 200, true, 'Product fetched successfully', product);
+        sendResponse(res, 200, true, 'Product details retrieved successfully.', product);
     } catch (err) {
         next(err);
     }
@@ -113,13 +113,13 @@ exports.createProduct = async (req, res, next) => {
         }
 
         if (!req.body.images || req.body.images.length === 0) {
-            return sendResponse(res, 422, false, 'Please upload at least one image');
+            return sendResponse(res, 422, false, 'Please provide at least one image for the product.');
         }
 
         const mrp = Number(req.body.mrp);
         const sellingPrice = Number(req.body.sellingPrice);
         if (sellingPrice > mrp) {
-            return sendResponse(res, 422, false, 'Validation Error', null, 'Selling price cannot be greater than MRP');
+            return sendResponse(res, 422, false, 'Validation Error', null, 'The selling price must be equal to or less than the Maximum Retail Price (MRP).');
         }
 
         req.body.mrp = mrp;
@@ -127,7 +127,7 @@ exports.createProduct = async (req, res, next) => {
         req.body.discount = calculateDiscount(mrp, sellingPrice);
 
         const product = await Product.create(req.body);
-        sendResponse(res, 201, true, 'Product created successfully', product);
+        sendResponse(res, 201, true, 'New product added to the catalog successfully.', product);
     } catch (err) {
         next(err);
     }
@@ -140,7 +140,7 @@ exports.updateProduct = async (req, res, next) => {
     try {
         let product = await Product.findById(req.params.id);
         if (!product) {
-            return sendResponse(res, 404, false, 'Product not found');
+            return sendResponse(res, 404, false, 'The requested product could not be found in our database.');
         }
 
         // Handle Images
@@ -168,7 +168,7 @@ exports.updateProduct = async (req, res, next) => {
         }
 
         if (!req.body.images || req.body.images.length === 0) {
-            return sendResponse(res, 422, false, 'Validation Error', null, 'Please keep at least one product image');
+            return sendResponse(res, 422, false, 'Validation Error', null, 'A product must have at least one valid image.');
         }
 
         const mrp = req.body.mrp !== undefined ? Number(req.body.mrp) : Number(product.mrp);
@@ -177,7 +177,7 @@ exports.updateProduct = async (req, res, next) => {
             : Number(product.sellingPrice);
 
         if (sellingPrice > mrp) {
-            return sendResponse(res, 422, false, 'Validation Error', null, 'Selling price cannot be greater than MRP');
+            return sendResponse(res, 422, false, 'Validation Error', null, 'The selling price must be equal to or less than the Maximum Retail Price (MRP).');
         }
 
         if (req.body.mrp !== undefined) req.body.mrp = mrp;
@@ -187,7 +187,7 @@ exports.updateProduct = async (req, res, next) => {
         product.set(req.body);
         await product.save();
 
-        sendResponse(res, 200, true, 'Product updated successfully', product);
+        sendResponse(res, 200, true, 'Product information has been updated successfully.', product);
     } catch (err) {
         next(err);
     }
@@ -200,7 +200,7 @@ exports.deleteProduct = async (req, res, next) => {
     try {
         const product = await Product.findById(req.params.id);
         if (!product) {
-            return sendResponse(res, 404, false, 'Product not found');
+            return sendResponse(res, 404, false, 'The requested product could not be found in our database.');
         }
         await product.deleteOne();
         return res.status(204).send();

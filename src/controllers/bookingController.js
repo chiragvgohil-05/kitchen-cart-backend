@@ -2,108 +2,172 @@ const Booking = require('../models/bookingModel');
 const Table = require('../models/tableModel');
 const sendResponse = require('../utils/responseHandler');
 
-// @desc    Create new booking
-// @route   POST /api/v1/bookings
-// @access  Private
+const timeToMinutes = (timeStr) => {
+    if (!timeStr) return 0;
+    const [hrs, mins] = timeStr.split(':').map(Number);
+    return (hrs * 60) + (mins || 0);
+};
+
+const isOverlapping = (start1, end1, start2, end2) => {
+    const s1 = timeToMinutes(start1);
+    const e1 = timeToMinutes(end1);
+    const s2 = timeToMinutes(start2);
+    const e2 = timeToMinutes(end2);
+    return s1 < e2 && s2 < e1;
+};
+
+// @desc    Get all bookings (admin view: all, user view: only theirs)
+// @route   GET /api/bookings
+// @access  Registered Users / Admin
+exports.getBookings = async (req, res, next) => {
+    try {
+        let query;
+
+        // If admin/staff show all, else only user's bookings
+        if (req.user.role === 'admin' || req.user.role === 'staff') {
+            query = Booking.find().populate('user table');
+        } else {
+            query = Booking.find({ user: req.user._id }).populate('table');
+        }
+
+        const bookings = await query.sort('-createdAt');
+
+        sendResponse(res, 200, true, 'Reservations retrieved successfully.', bookings);
+    } catch (err) {
+        next(err);
+    }
+};
+
+// @desc    Get available tables for a certain date/time
+// @route   GET /api/bookings/available
+// @access  Public
+exports.getAvailableTables = async (req, res, next) => {
+    try {
+        const { date, startTime, endTime } = req.query;
+
+        if (!date || !startTime || !endTime) {
+            return sendResponse(res, 200, true, 'No criteria provided for availability check.', []);
+        }
+
+        const normalizedDate = new Date(date);
+        normalizedDate.setUTCHours(0, 0, 0, 0);
+
+        // 1. Get all tables that are currently "status: Available"
+        const activeTables = await Table.find({ status: 'Available' });
+
+        // 2. Identify the bookings for the given date that overlap
+        const dayBookings = await Booking.find({
+            bookingDate: normalizedDate,
+            status: { $in: ['Confirmed', 'Pending'] }
+        });
+
+        // 3. Filter out tables that have overlapping bookings
+        const bookedTableIdsForSlot = dayBookings
+            .filter(b => isOverlapping(startTime, endTime, b.startTime, b.endTime))
+            .map(b => b.table.toString());
+
+        // 4. Return tables that aren't booked
+        const availableTables = activeTables.filter(t => !bookedTableIdsForSlot.includes(t._id.toString()));
+
+        sendResponse(res, 200, true, 'Available tables for the selected slot retrieved successfully.', availableTables);
+    } catch (err) {
+        next(err);
+    }
+};
+
+// @desc    Create a new booking
+// @route   POST /api/bookings
+// @access  Registered User
 exports.createBooking = async (req, res, next) => {
     try {
-        req.body.user = req.user.id;
+        const { table, bookingDate, startTime, endTime, specialRequests } = req.body;
+        const numberOfPeople = req.body.numberOfPeople || req.body.numberOfGuests;
 
-        // Check if table exists and is available
-        const table = await Table.findById(req.body.table);
-        if (!table) {
-            return sendResponse(res, 404, false, 'Table not found');
+        if (!startTime || !endTime) {
+            return sendResponse(res, 400, false, 'Both start and end times are required to process your reservation.');
         }
 
-        if (table.status === 'Occupied') {
-            return sendResponse(res, 400, false, 'Table is currently occupied');
+        // 1. Check Max 5 hours duration
+        const startMin = timeToMinutes(startTime);
+        const endMin = timeToMinutes(endTime);
+        const durationMin = endMin - startMin;
+
+        if (durationMin <= 0) {
+            return sendResponse(res, 400, false, 'The reservation end time must be later than the start time.');
+        }
+        if (durationMin > 300) {
+            return sendResponse(res, 400, false, 'Reservations are limited to a maximum duration of 5 hours.');
         }
 
-        const booking = await Booking.create(req.body);
+        // 2. Check table capacity
+        const requestedTable = await Table.findById(table);
+        if (!requestedTable) {
+            return sendResponse(res, 404, false, 'The requested table could not be found in our system.');
+        }
+        if (requestedTable.capacity < numberOfPeople) {
+            return sendResponse(res, 400, false, `The selected table has a maximum capacity of ${requestedTable.capacity} guests.`);
+        }
 
-        // Update table status optionally, or handle availability logic separately
-        // For simplicity, we just create the booking record
+        const normalizedBookingDate = new Date(bookingDate);
+        normalizedBookingDate.setUTCHours(0, 0, 0, 0);
 
-        sendResponse(res, 201, true, 'Booking created successfully', booking);
+        // 3. Check for overlapping bookings
+        const existingBookings = await Booking.find({
+            table,
+            bookingDate: normalizedBookingDate,
+            status: { $in: ['Confirmed', 'Pending'] }
+        });
+
+        const hasOverlap = existingBookings.some(b => isOverlapping(startTime, endTime, b.startTime, b.endTime));
+
+        if (hasOverlap) {
+            return sendResponse(res, 400, false, 'The selected time slot overlaps with an existing reservation for this table.');
+        }
+
+        // 4. Create booking
+        const booking = await Booking.create({
+            user: req.user._id,
+            table,
+            bookingDate: normalizedBookingDate,
+            startTime,
+            endTime,
+            timeSlot: `${startTime} - ${endTime}`,
+            numberOfPeople,
+            specialRequests
+        });
+
+        sendResponse(res, 201, true, 'Your reservation has been successfully booked.', booking);
     } catch (err) {
         next(err);
     }
 };
 
-// @desc    Get my bookings
-// @route   GET /api/v1/bookings/mybookings
-// @access  Private
-exports.getMyBookings = async (req, res, next) => {
-    try {
-        const bookings = await Booking.find({ user: req.user.id }).populate('table');
-        sendResponse(res, 200, true, 'User bookings fetched successfully', bookings);
-    } catch (err) {
-        next(err);
-    }
-};
-
-// @desc    Get all bookings
-// @route   GET /api/v1/bookings
-// @access  Private/Admin/Staff
-exports.getAllBookings = async (req, res, next) => {
-    try {
-        const bookings = await Booking.find().populate('user').populate('table');
-        sendResponse(res, 200, true, 'All bookings fetched successfully', bookings);
-    } catch (err) {
-        next(err);
-    }
-};
-
-// @desc    Update booking status
-// @route   PUT /api/v1/bookings/:id/status
-// @access  Private/Admin/Staff
+// @desc    Update booking status (Admin: confirm/complete, User: cancel)
+// @route   PATCH /api/bookings/:id  OR  PUT /api/bookings/:id/status
+// @access  Registered User / Admin
 exports.updateBookingStatus = async (req, res, next) => {
     try {
-        let booking = await Booking.findById(req.params.id);
-
-        if (!booking) {
-            return sendResponse(res, 404, false, 'Booking not found');
-        }
-
-        booking.status = req.body.status;
-        await booking.save();
-
-        // If booking is confirmed or completed, we might want to update table status
-        if (req.body.status === 'Confirmed') {
-            await Table.findByIdAndUpdate(booking.table, { status: 'Reserved' });
-        } else if (req.body.status === 'Completed' || req.body.status === 'Cancelled') {
-            await Table.findByIdAndUpdate(booking.table, { status: 'Available' });
-        }
-
-        sendResponse(res, 200, true, 'Booking status updated successfully', booking);
-    } catch (err) {
-        next(err);
-    }
-};
-
-// @desc    Cancel booking
-// @route   DELETE /api/v1/bookings/:id
-// @access  Private
-exports.cancelBooking = async (req, res, next) => {
-    try {
+        const { status } = req.body;
         const booking = await Booking.findById(req.params.id);
 
         if (!booking) {
-            return sendResponse(res, 404, false, 'Booking not found');
+            return sendResponse(res, 404, false, 'The specified reservation could not be found.');
         }
 
-        // Make sure user owns booking or is admin/staff
-        if (booking.user.toString() !== req.user.id && req.user.role === 'user') {
-            return sendResponse(res, 401, false, 'Not authorized to cancel this booking');
+        // Basic authorization
+        if (req.user.role === 'user') {
+            if (booking.user.toString() !== req.user._id.toString()) {
+                return sendResponse(res, 401, false, 'You do not have the required permissions to perform this action.');
+            }
+            if (status !== 'Cancelled') {
+                return sendResponse(res, 400, false, 'Users are only permitted to cancel their own reservations.');
+            }
         }
 
-        booking.status = 'Cancelled';
+        booking.status = status;
         await booking.save();
 
-        // Update table status to available
-        await Table.findByIdAndUpdate(booking.table, { status: 'Available' });
-
-        sendResponse(res, 200, true, 'Booking cancelled successfully', {});
+        sendResponse(res, 200, true, `Reservation status updated to ${status} successfully.`, booking);
     } catch (err) {
         next(err);
     }

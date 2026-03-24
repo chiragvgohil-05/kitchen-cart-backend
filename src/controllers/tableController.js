@@ -2,82 +2,61 @@ const Table = require('../models/tableModel');
 const sendResponse = require('../utils/responseHandler');
 
 // @desc    Get all tables
-// @route   GET /api/v1/tables
+// @route   GET /api/tables
 // @access  Public
 exports.getTables = async (req, res, next) => {
     try {
-        const tables = await Table.find();
-        sendResponse(res, 200, true, 'Tables fetched successfully', tables);
+        const tables = await Table.find().sort('tableNumber');
+        sendResponse(res, 200, true, 'Table layout and status information retrieved successfully.', tables);
     } catch (err) {
         next(err);
     }
 };
 
-// @desc    Get single table
-// @route   GET /api/v1/tables/:id
-// @access  Public
-exports.getTable = async (req, res, next) => {
-    try {
-        const table = await Table.findById(req.params.id);
-
-        if (!table) {
-            return sendResponse(res, 404, false, 'Table not found');
-        }
-
-        sendResponse(res, 200, true, 'Table fetched successfully', table);
-    } catch (err) {
-        next(err);
-    }
-};
-
-// @desc    Create new table
-// @route   POST /api/v1/tables
-// @access  Private/Admin
+// @desc    Create a new table
+// @route   POST /api/tables
+// @access  Admin
 exports.createTable = async (req, res, next) => {
     try {
         const table = await Table.create(req.body);
-        sendResponse(res, 201, true, 'Table created successfully', table);
+        sendResponse(res, 201, true, 'Successfully added a new table to the restaurant layout.', table);
     } catch (err) {
         next(err);
     }
 };
 
-// @desc    Update table
-// @route   PUT /api/v1/tables/:id
-// @access  Private/Admin
+// @desc    Update a table
+// @route   PUT /api/tables/:id
+// @access  Admin
 exports.updateTable = async (req, res, next) => {
     try {
-        let table = await Table.findById(req.params.id);
-
-        if (!table) {
-            return sendResponse(res, 404, false, 'Table not found');
-        }
-
-        table = await Table.findByIdAndUpdate(req.params.id, req.body, {
+        const table = await Table.findByIdAndUpdate(req.params.id, req.body, {
             new: true,
             runValidators: true
         });
 
-        sendResponse(res, 200, true, 'Table updated successfully', table);
+        if (!table) {
+            return sendResponse(res, 404, false, 'The specified table could not be found in our records.');
+        }
+
+        sendResponse(res, 200, true, 'Table configuration details updated successfully.', table);
     } catch (err) {
         next(err);
     }
 };
 
-// @desc    Delete table
-// @route   DELETE /api/v1/tables/:id
-// @access  Private/Admin
+// @desc    Delete a table
+// @route   DELETE /api/tables/:id
+// @access  Admin
 exports.deleteTable = async (req, res, next) => {
     try {
-        const table = await Table.findById(req.params.id);
+        const table = await Table.findByIdAndDelete(req.params.id);
 
         if (!table) {
-            return sendResponse(res, 404, false, 'Table not found');
+            return sendResponse(res, 404, false, 'The specified table could not be found in our records.');
         }
 
-        await table.deleteOne();
-
-        sendResponse(res, 200, true, 'Table deleted successfully', {});
+        sendResponse(res, 200, true, 'Table has been successfully removed from the system.');
     } catch (err) {
         next(err);
     }

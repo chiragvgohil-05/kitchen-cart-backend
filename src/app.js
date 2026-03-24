@@ -49,6 +49,13 @@ const userRoutes = require('./routes/userRoutes');
 const walletRoutes = require('./routes/walletRoutes');
 const tableRoutes = require('./routes/tableRoutes');
 const bookingRoutes = require('./routes/bookingRoutes');
+const settingRoutes = require('./routes/settingRoutes');
+const loyaltyRoutes = require('./routes/loyaltyRoutes');
+const rewardRoutes = require('./routes/rewardRoutes');
+const dashboardRoutes = require('./routes/dashboardRoutes');
+
+
+
 
 app.use('/api/auth', authRoutes);
 app.use('/api/categories', categoryRoutes);
@@ -61,6 +68,13 @@ app.use('/api/users', userRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/tables', tableRoutes);
 app.use('/api/bookings', bookingRoutes);
+app.use('/api/settings', settingRoutes);
+app.use('/api/loyalty', loyaltyRoutes);
+app.use('/api/rewards', rewardRoutes);
+app.use('/api/dashboard', dashboardRoutes);
+
+
+
 
 // Error Handler (Must be last middleware)
 app.use(errorHandler);

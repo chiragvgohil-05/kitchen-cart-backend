@@ -24,7 +24,7 @@ const userSchema = new mongoose.Schema({
     },
     role: {
         type: String,
-        enum: ['user', 'admin', 'staff'],
+        enum: ['user', 'staff', 'admin'],
         default: 'user'
     },
     address: {
@@ -39,6 +39,17 @@ const userSchema = new mongoose.Schema({
         default: 0,
         min: [0, 'Wallet balance cannot be negative']
     },
+    loyaltyPoints: {
+        type: Number,
+        default: 0,
+        min: [0, 'Loyalty points cannot be negative']
+    },
+    loyaltyTier: {
+        type: String,
+        enum: ['Bronze', 'Silver', 'Gold', 'Platinum'],
+        default: 'Bronze'
+    },
+
     createdAt: {
         type: Date,
         default: Date.now

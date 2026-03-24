@@ -26,7 +26,7 @@ router.get('/:id/invoice', getOrderInvoice);
 router.get('/', getMyOrders);
 router.put('/:id/cancel', cancelMyOrder);
 
-router.get('/admin', authorize('admin'), getAllOrders);
-router.put('/:id', authorize('admin'), updateOrderStatus);
+router.get('/admin', authorize('admin', 'staff'), getAllOrders);
+router.put('/:id', authorize('admin', 'staff'), updateOrderStatus);
 
 module.exports = router;

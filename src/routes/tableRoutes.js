@@ -1,7 +1,6 @@
 const express = require('express');
 const {
     getTables,
-    getTable,
     createTable,
     updateTable,
     deleteTable
@@ -12,13 +11,11 @@ const { authorize } = require('../middlewares/roleMiddleware');
 
 const router = express.Router();
 
-router.route('/')
-    .get(getTables)
-    .post(protect, authorize('admin'), createTable);
+router.get('/', getTables);
 
-router.route('/:id')
-    .get(getTable)
-    .put(protect, authorize('admin'), updateTable)
-    .delete(protect, authorize('admin'), deleteTable);
+// Admin-only routes
+router.post('/', protect, authorize('admin', 'staff'), createTable);
+router.put('/:id', protect, authorize('admin', 'staff'), updateTable);
+router.delete('/:id', protect, authorize('admin', 'staff'), deleteTable);
 
 module.exports = router;

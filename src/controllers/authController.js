@@ -18,7 +18,7 @@ exports.register = async (req, res, next) => {
         // Check if user exists
         let user = await User.findOne({ email });
         if (user) {
-            return sendResponse(res, 400, false, 'Email already exists');
+            return sendResponse(res, 400, false, 'This email address is already registered. Please login or use a different email.');
         }
 
         // Create user
@@ -29,6 +29,10 @@ exports.register = async (req, res, next) => {
             role,
             address
         });
+
+        // Add welcome bonus points!
+        const { addWelcomePoints } = require('../services/loyaltyService');
+        await addWelcomePoints(user._id);
 
         sendTokenResponse(user, 201, res);
     } catch (err) {
@@ -52,13 +56,13 @@ exports.login = async (req, res, next) => {
         // Check for user
         const user = await User.findOne({ email }).select('+password');
         if (!user) {
-            return sendResponse(res, 401, false, 'Invalid credentials');
+            return sendResponse(res, 401, false, 'Invalid credentials. Please verify your email and password.');
         }
 
         // Check if password matches
         const isMatch = await user.matchPassword(password);
         if (!isMatch) {
-            return sendResponse(res, 401, false, 'Invalid credentials');
+            return sendResponse(res, 401, false, 'Invalid credentials. Please verify your email and password.');
         }
 
         sendTokenResponse(user, 200, res);
@@ -89,7 +93,7 @@ exports.updateDetails = async (req, res, next) => {
             runValidators: true
         });
 
-        sendResponse(res, 200, true, 'User details updated successfully', user);
+        sendResponse(res, 200, true, 'Profile details updated successfully.', user);
     } catch (err) {
         next(err);
     }
@@ -115,7 +119,7 @@ const sendTokenResponse = (user, statusCode, res) => {
 
     res.status(statusCode).json({
         success: true,
-        message: 'Successfully authenticated',
+        message: 'Authentication successful. Welcome to SnowEra Cafe.',
         data: {
             token,
             user: userData
@@ -130,7 +134,7 @@ const sendTokenResponse = (user, statusCode, res) => {
 exports.getMe = async (req, res, next) => {
     try {
         const user = await User.findById(req.user.id);
-        sendResponse(res, 200, true, 'User profile fetched', user);
+        sendResponse(res, 200, true, 'User profile information retrieved successfully.', user);
     } catch (err) {
         next(err);
     }

@@ -7,7 +7,7 @@ const sendResponse = require('../utils/responseHandler');
 exports.getCategories = async (req, res, next) => {
     try {
         const categories = await Category.find();
-        sendResponse(res, 200, true, 'Categories fetched successfully', categories);
+        sendResponse(res, 200, true, 'Menu categories retrieved successfully.', categories);
     } catch (err) {
         next(err);
     }
@@ -21,10 +21,10 @@ exports.getCategory = async (req, res, next) => {
         const category = await Category.findById(req.params.id);
 
         if (!category) {
-            return sendResponse(res, 404, false, 'Category not found');
+            return sendResponse(res, 404, false, 'The requested menu category could not be located.');
         }
 
-        sendResponse(res, 200, true, 'Category fetched successfully', category);
+        sendResponse(res, 200, true, 'Category details retrieved successfully.', category);
     } catch (err) {
         next(err);
     }
@@ -36,7 +36,7 @@ exports.getCategory = async (req, res, next) => {
 exports.createCategory = async (req, res, next) => {
     try {
         const category = await Category.create(req.body);
-        sendResponse(res, 201, true, 'Category created successfully', category);
+        sendResponse(res, 201, true, 'Successfully created a new menu category.', category);
     } catch (err) {
         next(err);
     }
@@ -50,7 +50,7 @@ exports.updateCategory = async (req, res, next) => {
         let category = await Category.findById(req.params.id);
 
         if (!category) {
-            return sendResponse(res, 404, false, 'Category not found');
+            return sendResponse(res, 404, false, 'The requested menu category could not be located.');
         }
 
         category = await Category.findByIdAndUpdate(req.params.id, req.body, {
@@ -58,7 +58,7 @@ exports.updateCategory = async (req, res, next) => {
             runValidators: true
         });
 
-        sendResponse(res, 200, true, 'Category updated successfully', category);
+        sendResponse(res, 200, true, 'Menu category details updated successfully.', category);
     } catch (err) {
         next(err);
     }
@@ -72,12 +72,12 @@ exports.deleteCategory = async (req, res, next) => {
         const category = await Category.findById(req.params.id);
 
         if (!category) {
-            return sendResponse(res, 404, false, 'Category not found');
+            return sendResponse(res, 404, false, 'The requested menu category could not be located.');
         }
 
         await category.deleteOne();
 
-        sendResponse(res, 200, true, 'Category deleted successfully', {});
+        sendResponse(res, 200, true, 'Menu category removed from the system.', {});
     } catch (err) {
         next(err);
     }
