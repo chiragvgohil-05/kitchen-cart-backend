@@ -22,19 +22,20 @@ const getSettings = async (req, res, next) => {
 // @access  Private/Admin
 const updateSettings = async (req, res, next) => {
     try {
-        const { address, phone, email, facebook, instagram, twitter } = req.body;
+        const { address, phone, email, facebook, instagram, twitter, mobile } = req.body;
         let settings = await Setting.findOne();
         
         if (!settings) {
             settings = new Setting();
         }
 
-        settings.address = address || settings.address;
-        settings.phone = phone || settings.phone;
-        settings.email = email || settings.email;
-        settings.facebook = facebook || settings.facebook;
-        settings.instagram = instagram || settings.instagram;
-        settings.twitter = twitter || settings.twitter;
+        settings.address = address !== undefined ? address : settings.address;
+        settings.phone = phone !== undefined ? phone : settings.phone;
+        settings.mobile = mobile !== undefined ? mobile : settings.mobile;
+        settings.email = email !== undefined ? email : settings.email;
+        settings.facebook = facebook !== undefined ? facebook : settings.facebook;
+        settings.instagram = instagram !== undefined ? instagram : settings.instagram;
+        settings.twitter = twitter !== undefined ? twitter : settings.twitter;
         settings.updatedAt = Date.now();
 
         await settings.save();

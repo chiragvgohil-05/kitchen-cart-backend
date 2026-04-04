@@ -9,6 +9,10 @@ const settingSchema = new mongoose.Schema({
         type: String,
         default: '+91 (800) 123-4567'
     },
+    mobile: {
+        type: String,
+        default: '+91 (900) 123-4567'
+    },
     email: {
         type: String,
         default: 'hello@snoweracafe.com'

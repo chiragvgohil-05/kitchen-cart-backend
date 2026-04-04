@@ -12,6 +12,7 @@ const { creditWallet, debitWallet } = require('../services/walletService');
 const { runWithOptionalTransaction } = require('../services/transactionService');
 const { addPointsForOrder, redeemRewardDuringCheckout } = require('../services/loyaltyService');
 const Reward = require('../models/rewardModel');
+const Setting = require('../models/settingModel');
 
 const path = require('path');
 
@@ -85,7 +86,8 @@ const ensureInvoiceForOrder = async (order, options = {}) => {
     const invoicePath = path.join(invoiceDir, invoiceName);
 
     if (force || !fs.existsSync(invoicePath)) {
-        await createInvoice(order, invoicePath);
+        const settings = await Setting.findOne();
+        await createInvoice(order, invoicePath, settings);
     }
 
     return { invoiceName, invoicePath };
@@ -315,6 +317,9 @@ exports.createOrder = async (req, res, next) => {
 
         const { order, gatewayAmount } = result;
 
+        // Ensure order is fully populated for the confirmation email and invoice
+        const populatedOrder = await Order.findById(order._id).populate('table').populate('reward').populate('items.product');
+
         // If Razorpay is needed, we create the gateway order AFTER the local order is committed 
         // OR we can do it inside but it's risky if Razorpay succeeds but local transaction fails.
         // Actually, the previous code created it before. Let's create it now.
@@ -341,6 +346,7 @@ exports.createOrder = async (req, res, next) => {
             });
         }
 
+        await sendOrderConfirmationEmail(populatedOrder, req.user);
         return sendResponse(res, 201, true, 'Your order has been placed successfully. Thank you for choosing SnowEra Cafe!', { order });
     } catch (err) {
         next(err);
@@ -434,7 +440,7 @@ exports.verifyPayment = async (req, res, next) => {
         if (expectedSignature !== razorpay_signature) return sendResponse(res, 400, false, 'Payment verification failed due to an invalid security signature.');
 
         const { order } = await runWithOptionalTransaction(async (session) => {
-            const orderRecord = await withSession(Order.findOne({ _id: orderId, user: req.user.id }).populate('items.product'), session);
+            const orderRecord = await withSession(Order.findOne({ _id: orderId, user: req.user.id }).populate('items.product').populate('table').populate('reward'), session);
             if (!orderRecord) throw buildError('The specified order record could not be found.', 404);
             
             orderRecord.paymentStatus = 'paid';
@@ -456,23 +462,23 @@ exports.verifyPayment = async (req, res, next) => {
 
 exports.getMyOrders = async (req, res, next) => {
     try {
-        const orders = await Order.find({ user: req.user.id }).sort({ createdAt: -1 }).populate('items.product').populate('table');
+        const orders = await Order.find({ user: req.user.id }).sort({ createdAt: -1 }).populate('items.product').populate('table').populate('reward');
         sendResponse(res, 200, true, 'Your order history has been retrieved successfully.', orders);
     } catch (err) { next(err); }
 };
 
 exports.getAllOrders = async (req, res, next) => {
     try {
-        const orders = await Order.find().sort({ createdAt: -1 }).populate('user', 'name email').populate('items.product').populate('table');
+        const orders = await Order.find().sort({ createdAt: -1 }).populate('user', 'name email').populate('items.product').populate('table').populate('reward');
         sendResponse(res, 200, true, 'All system orders have been retrieved successfully.', orders);
     } catch (err) { next(err); }
 };
 
 exports.getOrderInvoice = async (req, res, next) => {
     try {
-        const order = await Order.findById(req.params.id).populate('items.product').populate('user', 'name email');
+        const order = await Order.findById(req.params.id).populate('items.product').populate('user', 'name email').populate('table').populate('reward');
         if (!order) return sendResponse(res, 404, false, 'The specified order record could not be found.');
-        const { invoiceName, invoicePath } = await ensureInvoiceForOrder(order);
+        const { invoiceName, invoicePath } = await ensureInvoiceForOrder(order, { force: true });
         return res.download(invoicePath, invoiceName);
     } catch (err) { next(err); }
 };
@@ -515,7 +521,7 @@ exports.verifyStripePayment = async (req, res, next) => {
         if (session.payment_status !== 'paid') return sendResponse(res, 400, false, 'We could not confirm your payment. Please check your transaction status.');
 
         const { order } = await runWithOptionalTransaction(async (dbSession) => {
-            const orderRecord = await withSession(Order.findOne({ _id: orderId, user: req.user.id }).populate('items.product'), dbSession);
+            const orderRecord = await withSession(Order.findOne({ _id: orderId, user: req.user.id }).populate('items.product').populate('table').populate('reward'), dbSession);
             if (!orderRecord) throw buildError('The specified order record could not be found.', 404);
             
             orderRecord.paymentStatus = 'paid';
