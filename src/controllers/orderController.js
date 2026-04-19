@@ -202,7 +202,7 @@ exports.createOrder = async (req, res, next) => {
         const { orderType, table, rewardId } = req.body;
         const paymentMethod = getValidPaymentMethod(req.body.paymentMethod);
         const shouldUseWallet = paymentMethod !== 'COD' && req.body.useWallet !== false;
-        
+
         let shippingAddress = {};
         if (orderType === 'Delivery') {
             shippingAddress = getProfileAddressForOrder(req.user);
@@ -231,7 +231,7 @@ exports.createOrder = async (req, res, next) => {
             }));
 
         const totalAmountBeforeDiscount = Number(orderItems.reduce((sum, item) => sum + (item.price * item.quantity), 0).toFixed(2));
-        
+
         let appliedReward = null;
         if (rewardId) {
             const reward = await Reward.findById(rewardId);
@@ -331,7 +331,7 @@ exports.createOrder = async (req, res, next) => {
                 currency: 'INR',
                 receipt: `rcpt_${order._id}`
             });
-            
+
             // Update order with razorpay_order_id
             order.paymentResult.razorpay_order_id = razorpayOrder.id;
             await order.save();
@@ -377,7 +377,7 @@ exports.updateOrderStatus = async (req, res, next) => {
             if (status === 'Cancelled') {
                 order.status = 'Cancelled';
                 order.cancelledAt = new Date();
-                
+
                 let walletCredited = getCancellationWalletCreditAmount(order);
                 if (walletCredited > 0) {
                     await creditWallet({
@@ -401,14 +401,14 @@ exports.updateOrderStatus = async (req, res, next) => {
                         order.inventoryAdjusted = true;
                     }
                     if (order.paymentStatus !== 'paid' && order.paymentMethod !== 'COD') {
-                         order.paymentStatus = 'paid';
+                        order.paymentStatus = 'paid';
                     }
                 }
-                
+
                 // Loyalty Points Logic
-                const isNewlyCompleted = (status === 'Delivered' || status === 'Served') && 
-                                       (oldStatus !== 'Delivered' && oldStatus !== 'Served');
-                
+                const isNewlyCompleted = (status === 'Delivered' || status === 'Served') &&
+                    (oldStatus !== 'Delivered' && oldStatus !== 'Served');
+
                 if (isNewlyCompleted && order.user) {
                     await addPointsForOrder({
                         userId: order.user,
@@ -442,7 +442,7 @@ exports.verifyPayment = async (req, res, next) => {
         const { order } = await runWithOptionalTransaction(async (session) => {
             const orderRecord = await withSession(Order.findOne({ _id: orderId, user: req.user.id }).populate('items.product').populate('table').populate('reward'), session);
             if (!orderRecord) throw buildError('The specified order record could not be found.', 404);
-            
+
             orderRecord.paymentStatus = 'paid';
             orderRecord.status = 'Confirmed';
             if (!orderRecord.inventoryAdjusted) {
@@ -523,7 +523,7 @@ exports.verifyStripePayment = async (req, res, next) => {
         const { order } = await runWithOptionalTransaction(async (dbSession) => {
             const orderRecord = await withSession(Order.findOne({ _id: orderId, user: req.user.id }).populate('items.product').populate('table').populate('reward'), dbSession);
             if (!orderRecord) throw buildError('The specified order record could not be found.', 404);
-            
+
             orderRecord.paymentStatus = 'paid';
             orderRecord.status = 'Confirmed';
             if (!orderRecord.inventoryAdjusted) {
@@ -549,10 +549,13 @@ exports.getRazorpayOrderForPendingOrder = async (req, res, next) => {
         if (order.gatewayAmount <= 0) return sendResponse(res, 400, false, 'No payment required for this order.');
 
         const amountInPaise = Math.round(order.gatewayAmount * 100);
+        const receipt = `ret_${order._id.toString().slice(-10)}_${Date.now()}`;
+        console.log('Creating Razorpay Order:', { amountInPaise, receipt });
+
         const razorpayOrder = await instance.orders.create({
             amount: amountInPaise,
             currency: 'INR',
-            receipt: `rcpt_retry_${order._id}_${Date.now()}`
+            receipt: receipt
         });
 
         return sendResponse(res, 200, true, 'Retry payment initialized successfully.', {
@@ -560,5 +563,13 @@ exports.getRazorpayOrderForPendingOrder = async (req, res, next) => {
             order,
             razorpayKeyId: process.env.RAZORPAY_KEY_ID
         });
-    } catch (err) { next(err); }
+    } catch (err) {
+        console.error('Razorpay Retry Error:', {
+            message: err.message,
+            statusCode: err.statusCode,
+            description: err.error?.description,
+            metadata: err.error?.metadata
+        });
+        next(err);
+    }
 };
