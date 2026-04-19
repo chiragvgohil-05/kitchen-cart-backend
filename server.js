@@ -5,11 +5,16 @@ const connectDB = require('./src/config/db');
 const PORT = process.env.PORT || 5000;
 
 // Connect to Database
-connectDB();
+
+console.log("Run file")
+
+console.log({ PORT })
 
 const server = app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });
+
+connectDB();
 
 // Handle usage of unhandled promise rejections
 process.on('unhandledRejection', (err, promise) => {
