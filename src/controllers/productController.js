@@ -96,7 +96,7 @@ exports.getProduct = async (req, res, next) => {
 exports.createProduct = async (req, res, next) => {
     try {
         if (req.files && req.files.length > 0) {
-            req.body.images = req.files.map(file => `/public/uploads/products/${file.filename}`);
+            req.body.images = req.files.map(file => file.path);
         }
 
         // Parse keyFeatures and technicalSpecs if they come as strings (common with FormData)
@@ -149,7 +149,7 @@ exports.updateProduct = async (req, res, next) => {
             images = Array.isArray(req.body.existingImages) ? req.body.existingImages : [req.body.existingImages];
         }
         if (req.files && req.files.length > 0) {
-            const newImages = req.files.map(file => `/public/uploads/products/${file.filename}`);
+            const newImages = req.files.map(file => file.path);
             images = [...images, ...newImages];
         }
         req.body.images = images;
