@@ -21,16 +21,19 @@ app.use(morgan('dev'));
 const path = require('path');
 app.use('/public', express.static(path.join(__dirname, '../public')));
 
+// Trust proxy (required for Render/Vercel/Railways to see correct User IP)
+app.set('trust proxy', 1);
+
 // Rate Limiting
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: process.env.NODE_ENV === 'production' ? 100 : 1000, // Relaxed limit in development
+    max: 500, // Increased limit for production
     message: 'Too many requests from this IP, please try again after 15 minutes',
     handler: (req, res, next, options) => {
         sendResponse(res, 429, false, options.message);
     }
 });
-app.use(limiter);
+app.use('/api/', limiter); // Only apply to API routes
 
 // Routes Placeholder (will be imported here later)
 app.get('/', (req, res) => {
